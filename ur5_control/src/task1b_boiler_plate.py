@@ -73,7 +73,7 @@ class FruitsTF(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()                                               
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.team_id = "eYRC#5076"
+        self.team_id = "5076"      # team-> eYRC#5076
 
         # if SHOW_IMAGE:
         #     cv2.namedWindow('fruits_tf_view', cv2.WINDOW_NORMAL)

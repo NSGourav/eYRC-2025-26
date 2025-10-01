@@ -22,8 +22,8 @@ class ebotNav(Node):
         self.current_yaw = 1.57  # Facing forwards
         self.laser_data = []
 
-        self.forward_inflation = 0.4  # Meters
-        self.side_inflation = 0.4     # Meters
+        self.forward_inflation = 0.5  # Meters
+        self.side_inflation = 0.6     # Meters
 
         self.waypoints = [
             [-1.53, -1.95, 1.57],       # P1: (x1, y1, yaw1)
@@ -74,8 +74,8 @@ class ebotNav(Node):
                 return
             else:
                 if abs(angle_diff) > 0.2:  # If not facing the waypoint
-                    cmd_msg.angular.z = 0.3 * angle_diff
-                    cmd_msg.linear.x = 0.1
+                    cmd_msg.angular.z = 0.3 * angle_diff*1.25
+                    cmd_msg.linear.x = 0.1*1.25
                 else:
                     cmd_msg.linear.x = 0.7
         elif abs(yaw_error) > 0.1:  # Align to final yaw
@@ -102,8 +102,8 @@ class ebotNav(Node):
     def obstacle_avoidance(self, direction: int):
         self.get_logger().warn("Obstacle detected! Rotating...")
         cmd = Twist()
-        cmd.angular.z = 0.5*direction
-        cmd.linear.x = 0.7
+        cmd.angular.z = 0.55*direction
+        cmd.linear.x = 0.5
         self.cmd_pub.publish(cmd)
 
     def stop_robot(self):

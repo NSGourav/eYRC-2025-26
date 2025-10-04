@@ -31,3 +31,8 @@ ros2 launch eyantra_warehouse task1_bonus.launch.py
 - `pymoveit2/` - contains controller for Arm servo
 - `ur_description/` - Universal Robots arm description
 - `ur_simulation_gz/` - Gazebo simulation for Universal Robots arm
+
+Run nav script for task 1A:-
+```
+python3 ebot_nav_task!A.py
+```

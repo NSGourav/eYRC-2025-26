@@ -34,6 +34,10 @@ install(DIRECTORY
     srv
     DESTINATION share/${PROJECT_NAME}
 )
+install(DIRECTORY examples/
+  DESTINATION share/${PROJECT_NAME}/examples
+)
+
 
 
 ament_package()

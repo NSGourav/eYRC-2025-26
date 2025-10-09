@@ -1,115 +1,142 @@
 #!/usr/bin/env python3
 import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
+import PyKDL as kdl
+from urdf_parser_py.urdf import URDF
 import numpy as np
-import tf_transformations  # pip install transforms3d or tf-transformations
+import sys
+import os
+import time
+import importlib.util
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+from ament_index_python.packages import get_package_share_directory
 
-class EndEffectorServoNode(Node):
+# Get the absolute path of the file inside the package
+package_path = get_package_share_directory("pymoveit2")
+kdl_file_path = os.path.join(package_path, "examples", "kdl_parser_py.py")
+
+# Dynamically import the file
+spec = importlib.util.spec_from_file_location("kdl_parser_py", kdl_file_path)
+kdl_parser_py = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kdl_parser_py)
+treeFromUrdfModel = kdl_parser_py.treeFromUrdfModel
+
+class JointServoingNode(Node):
     def __init__(self):
-        super().__init__('ee_servo_node')
+        super().__init__('joint_servoing_node')
 
-        # Publisher: twist commands for MoveIt Servo
-        self.pub = self.create_publisher(Twist, '/delta_twist_cmds', 10)
-
-        # Subscriber: get current end-effector pose
-        self.sub = self.create_subscription(PoseStamped, '/tcp_pose_raw', self.pose_callback, 10)
-
-        # --- List of waypoints (pos + ori) ---
-        self.waypoints = [
-            (np.array([-0.214, -0.532, 0.557]), np.array([0.707, 0.028, 0.034, 0.707])),
-            (np.array([-0.159, 0.501, 0.415]), np.array([0.029, 0.997, 0.045,0.033])),
-            (np.array([ -0.806, 0.010, 0.182]), np.array([-0.684, 0.726, 0.05, 0.008]))
-        ]
-
-        self.goal_idx = 0  # Start with first waypoint
-        self.goal_position, self.goal_orientation = self.waypoints[self.goal_idx]
-
-        self.current_position = None
-        self.current_orientation = None
-        self.timer = self.create_timer(0.1, self.control_loop)
-
-    def pose_callback(self, msg):
-        """Update current pose of the EE"""
-        self.current_position = np.array([
-            msg.pose.position.x,
-            msg.pose.position.y,
-            msg.pose.position.z
-        ])
-        self.current_orientation = np.array([
-            msg.pose.orientation.x,
-            msg.pose.orientation.y,
-            msg.pose.orientation.z,
-            msg.pose.orientation.w
-        ])
-
-    def control_loop(self):
-        if self.current_position is None or self.current_orientation is None:
+        # --- Load URDF and Build KDL Chain ---
+        urdf_path = os.path.join(package_path, "examples", "ur5_arm.urdf")
+        robot_model = URDF.from_xml_file(urdf_path)
+        ok, tree = treeFromUrdfModel(robot_model)
+        if not ok:
+            self.get_logger().error("Failed to build KDL tree from URDF")
             return
 
-        twist = Twist()
+        base_link = "base_link"
+        ee_link = "wrist_3_link"
+        self.chain = tree.getChain(base_link, ee_link)
+        self.num_joints = self.chain.getNrOfJoints()
 
-        # --- Position Control ---
-        position_error = self.goal_position - self.current_position
-        pos_dist = np.linalg.norm(position_error)
+        # --- Define Multiple Waypoints (XYZ + Quaternion XYZW) ---
+        self.waypoints = [
+            {"pos": [-0.214, -0.532, 0.557], "quat": [0.707, 0.028, 0.034, 0.707]},
+            {"pos": [ -0.159, 0.501, 0.415 ], "quat": [0.029, 0.997, 0.045,0.033]},
+            {"pos": [ -0.706, 0.010, 0.182] , "quat":  [-0.684, 0.726, 0.05, 0.008]}, # -0.806
+        ]
 
-        if pos_dist > 0.01:  # 1cm tolerance
-            v = 1.0 * position_error   # proportional control
-            # twist.linear.x = float(v[0])
-            # twist.linear.y = float(v[1])
-            # twist.linear.z = float(v[2])
-            # --- Clamp linear velocity ---
-            max_lin_vel = 0.1  # m/s
-            v = np.clip(v, -max_lin_vel, max_lin_vel)
-            twist.linear.x, twist.linear.y, twist.linear.z = v.tolist()
+        # --- Compute IK for Each Waypoint ---
+        ik_solver = kdl.ChainIkSolverPos_LMA(self.chain)
+        current_guess = kdl.JntArray(self.num_joints)
+        home_pos = [0, -np.pi/2, np.pi/2, 0, np.pi/2, 0]
+        for i in range(self.num_joints):
+            current_guess[i] = home_pos[i]
 
-        # --- Orientation Control ---
-        # Compute quaternion error: q_err = q_goal * q_current_inverse
-        q_goal = self.goal_orientation
-        q_curr = self.current_orientation
-        q_curr_inv = tf_transformations.quaternion_inverse(q_curr)
-        q_err = tf_transformations.quaternion_multiply(q_goal, q_curr_inv)
-        q_err = np.array(q_err)
-
-        if q_err[3] < 0:
-            q_err = -q_err
-
-        # Convert error quaternion to axis-angle
-        angle = 2 * np.arccos(np.clip(q_err[3], -1.0, 1.0))
-        if angle > 1e-3:  # if orientation error is significant
-            vec = np.array(q_err[:3])   # convert to numpy array
-            axis = vec / (np.linalg.norm(vec) + 1e-9)
-            omega = 1.0 * angle * axis  # proportional gain
-            # twist.angular.x = float(omega[0])
-            # twist.angular.y = float(omega[1])
-            # twist.angular.z = float(omega[2])
-            # --- Clamp angular velocity ---
-            max_ang_vel = 0.5  # rad/s
-            omega = np.clip(omega, -max_ang_vel, max_ang_vel)
-            twist.angular.x, twist.angular.y, twist.angular.z = omega.tolist()
-
-        # Publish twist
-        self.pub.publish(twist)
-        self.get_logger().info(f"EE pos_err={position_error}, angle_err={angle:.3f}")
-
-        # Check if current goal is reached
-        if pos_dist < 0.01 and angle < 0.05:  # both position + orientation tolerances
-            self.get_logger().info(f"Reached waypoint {self.goal_idx+1}")
-            self.goal_idx += 1
-            if self.goal_idx < len(self.waypoints):
-                self.goal_position, self.goal_orientation = self.waypoints[self.goal_idx]
-                self.get_logger().info(f"Moving to next waypoint {self.goal_idx+1}")
+        self.q_goals = []
+        for idx, wp in enumerate(self.waypoints):
+            pos, quat = wp["pos"], wp["quat"]   # np.array(wp["quat"], dtype=float)
+            # quat = quat / np.linalg.norm(quat)
+            rotation = kdl.Rotation.Quaternion(*quat)
+            frame = kdl.Frame(rotation, kdl.Vector(*pos))
+            result = kdl.JntArray(self.num_joints)
+            ret = ik_solver.CartToJnt(current_guess, frame, result)
+            if ret >= 0:
+                q_goal = np.array([result[i] for i in range(self.num_joints)])
+                self.q_goals.append(q_goal)
+                self.get_logger().info(f"IK solution {idx+1}: {q_goal}")
+                current_guess = result
             else:
-                self.get_logger().info("All waypoints reached!")
-                twist = Twist()  # stop
-                self.pub.publish(twist)
-                return
+                self.get_logger().error(f"Failed IK for waypoint {idx+1}")
+
+        # --- Initialize ROS Interfaces ---
+        self.current_joints = np.zeros(self.num_joints)
+        self.joint_names = [
+            "shoulder_pan_joint", "shoulder_lift_joint",
+            "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
+        ]
+
+        self.create_subscription(JointState, "/joint_states", self.joint_state_callback, 10)
+        self.vel_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
+
+        self.timer = self.create_timer(0.02, self.control_loop)  # 50 Hz
+        self.kp = 1.0
+        self.current_goal_idx = 0
+        self.q_goal = self.q_goals[self.current_goal_idx]
+        self.reached_goal = False
+        self.pause_time = 1.0       # pause 1 second at each waypoint
+        self.last_reach_time = None
+
+    def joint_state_callback(self, msg: JointState):
+        name_to_pos = dict(zip(msg.name, msg.position))
+        self.current_joints = np.array([name_to_pos.get(j, 0.0) for j in self.joint_names])
+
+    def control_loop(self):
+        # If all waypoints completed
+        if self.current_goal_idx >= len(self.q_goals):
+            if not hasattr(self, "done_logged"):
+                self.get_logger().info("All waypoints reached. Stopping servoing.")
+                self.done_logged = True
+            return
+
+        delta_q = self.q_goal - self.current_joints
+        vel_cmd = self.kp * delta_q
+        vel_cmd = np.clip(vel_cmd, -0.5, 0.5)   # Velocity thresholding added here
+
+        if np.all(np.abs(delta_q) < 0.002):
+            if not self.reached_goal:
+                self.get_logger().info(f"Reached waypoint {self.current_goal_idx + 1}")
+                self.reached_goal = True
+                self.last_reach_time = time.time()
+            # Wait before moving to next
+            if time.time() - self.last_reach_time > self.pause_time:
+                self.current_goal_idx += 1
+                if self.current_goal_idx < len(self.q_goals):
+                    self.q_goal = self.q_goals[self.current_goal_idx]
+                    self.reached_goal = False
+                    self.get_logger().info(f"➡️ Moving to waypoint {self.current_goal_idx + 1}")
+            vel_cmd = np.zeros_like(vel_cmd)
+
+        msg = Float64MultiArray()
+        msg.data = list(vel_cmd)
+        self.vel_pub.publish(msg)
+
+        # Log every ~1 second
+        self.log_counter = getattr(self, "log_counter", 0) + 1
+        if self.log_counter % 50 == 0:
+            self.get_logger().info(f"Publishing velocity: {vel_cmd}")
 
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = EndEffectorServoNode()
-    rclpy.spin(node)
+def main():
+    rclpy.init()
+    node = JointServoingNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()

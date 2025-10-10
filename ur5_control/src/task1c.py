@@ -79,8 +79,11 @@ class JointServoingNode(Node):
         self.create_subscription(JointState, "/joint_states", self.joint_state_callback, 10)
         self.vel_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
 
-        self.timer = self.create_timer(0.02, self.control_loop)  # 50 Hz
-        self.kp = 1.0
+        self.timer = self.create_timer(0.01, self.control_loop)  # 100 Hz
+        self.kp = 0.7
+        self.kd = 0.02  # Derivative gain
+        self.prev_delta_q = np.zeros(self.num_joints)
+        self.dt = 0.01
         self.current_goal_idx = 0
         self.q_goal = self.q_goals[self.current_goal_idx]
         self.reached_goal = False
@@ -100,10 +103,34 @@ class JointServoingNode(Node):
             return
 
         delta_q = self.q_goal - self.current_joints
-        vel_cmd = self.kp * delta_q
+        vel_cmd = self.kp * delta_q + self.kd * (delta_q - self.prev_delta_q) / self.dt
         vel_cmd = np.clip(vel_cmd, -0.5, 0.5)   # Velocity thresholding added here
 
-        if np.all(np.abs(delta_q) < 0.002):
+        # --- Compute current end-effector pose via FK ---
+        fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
+        current_kdl_joints = kdl.JntArray(self.num_joints)
+        for i in range(self.num_joints):
+            current_kdl_joints[i] = self.current_joints[i]
+
+        current_frame = kdl.Frame()
+        fk_solver.JntToCart(current_kdl_joints, current_frame)
+
+        current_pos = np.array([current_frame.p.x(), current_frame.p.y(), current_frame.p.z()])
+        current_quat = np.array(current_frame.M.GetQuaternion())
+
+        # --- Target pose for this waypoint ---
+        wp = self.waypoints[self.current_goal_idx]
+        target_pos = np.array(wp["pos"])
+        target_quat = np.array(wp["quat"])
+
+        # --- Compute pose errors ---
+        pos_error = np.linalg.norm(target_pos - current_pos)
+        dot = np.abs(np.dot(current_quat, target_quat))
+        dot = np.clip(dot, -1.0, 1.0)
+        ori_error = 2 * np.arccos(dot)
+
+        # --- Use pose-based tolerance instead of joint-space tolerance ---
+        if pos_error < 0.04 and ori_error < np.deg2rad(10):
             if not self.reached_goal:
                 self.get_logger().info(f"Reached waypoint {self.current_goal_idx + 1}")
                 self.reached_goal = True
@@ -116,7 +143,8 @@ class JointServoingNode(Node):
                     self.reached_goal = False
                     self.get_logger().info(f"➡️ Moving to waypoint {self.current_goal_idx + 1}")
             vel_cmd = np.zeros_like(vel_cmd)
-
+        
+        self.prev_delta_q = delta_q.copy()
         msg = Float64MultiArray()
         msg.data = list(vel_cmd)
         self.vel_pub.publish(msg)

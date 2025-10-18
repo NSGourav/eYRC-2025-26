@@ -38,7 +38,5 @@ install(DIRECTORY examples/
   DESTINATION share/${PROJECT_NAME}/examples
 )
 
-
-
 ament_package()
 

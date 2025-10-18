@@ -1,3 +1,12 @@
+# Team ID:          [ eYRC#5076 ]
+# Author List:		[ Names of team members worked on this file separated by Comma: Nagulapalli Shavaneeth Gourav, Raj Mohammad, Pradeep J, Anand Vardhan]
+# Filename:		    task1c.py
+# Functions:
+#			        [ Comma separated list of functions in this file ]
+# Nodes:		    Add your publishing and subscribing node
+#			        Publishing Topics  - [ /delta_joint_cmds ]
+#                   Subscribing Topics - [/joint_states]
+
 #!/usr/bin/env python3
 import rclpy
 import PyKDL as kdl
@@ -39,11 +48,31 @@ class JointServoingNode(Node):
         self.chain = tree.getChain(base_link, ee_link)
         self.num_joints = self.chain.getNrOfJoints()
 
+        self.create_subscription(JointState, "/joint_states", self.joint_state_callback, 10)
+        self.vel_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
+
+        # --- Initialize ROS Interfaces ---
+        self.current_joints = np.zeros(self.num_joints)
+        self.joint_names = [
+            "shoulder_pan_joint", "shoulder_lift_joint",
+            "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
+        ]
+
+        self.q_goals = []
+        self.timer = self.create_timer(0.01, self.control_loop)  # 100 Hz
+        self.kp = 0.7
+        self.kd = 0.02  # Derivative gain
+        self.prev_delta_q = np.zeros(self.num_joints)
+        self.dt = 0.01
+        self.reached_goal = False
+        self.pause_time = 1.0       # pause 1 second at each waypoint
+        self.last_reach_time = None
+
         # --- Define Multiple Waypoints (XYZ + Quaternion XYZW) ---
         self.waypoints = [
-            {"pos": [-0.214, -0.532, 0.557], "quat": [0.707, 0.028, 0.034, 0.707]},
-            {"pos": [ -0.159, 0.501, 0.415 ], "quat": [0.029, 0.997, 0.045,0.033]},
-            {"pos": [ -0.706, 0.010, 0.182] , "quat":  [-0.684, 0.726, 0.05, 0.008]}, # -0.806
+            {"pos": [-0.214, -0.502, 0.557], "quat": [0.707, 0.028, 0.034, 0.707]},
+            {"pos": [ -0.706, 0.010, 0.182] , "quat":  [-0.684, 0.726, 0.05, 0.008]},
+            {"pos": [ -0.159, 0.501, 0.415 ], "quat": [0.029, 0.997, 0.045,0.033]}
         ]
 
         # --- Compute IK for Each Waypoint ---
@@ -53,10 +82,8 @@ class JointServoingNode(Node):
         for i in range(self.num_joints):
             current_guess[i] = home_pos[i]
 
-        self.q_goals = []
         for idx, wp in enumerate(self.waypoints):
-            pos, quat = wp["pos"], wp["quat"]   # np.array(wp["quat"], dtype=float)
-            # quat = quat / np.linalg.norm(quat)
+            pos, quat = wp["pos"], wp["quat"] 
             rotation = kdl.Rotation.Quaternion(*quat)
             frame = kdl.Frame(rotation, kdl.Vector(*pos))
             result = kdl.JntArray(self.num_joints)
@@ -79,23 +106,17 @@ class JointServoingNode(Node):
         self.create_subscription(JointState, "/joint_states", self.joint_state_callback, 10)
         self.vel_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
 
-        self.timer = self.create_timer(0.01, self.control_loop)  # 100 Hz
-        self.kp = 0.7
-        self.kd = 0.02  # Derivative gain
-        self.prev_delta_q = np.zeros(self.num_joints)
-        self.dt = 0.01
+        self.timer = self.create_timer(0.02, self.control_loop)  # 50 Hz
+        self.kp = 1.0
         self.current_goal_idx = 0
         self.q_goal = self.q_goals[self.current_goal_idx]
-        self.reached_goal = False
-        self.pause_time = 1.0       # pause 1 second at each waypoint
-        self.last_reach_time = None
+
 
     def joint_state_callback(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))
         self.current_joints = np.array([name_to_pos.get(j, 0.0) for j in self.joint_names])
 
     def control_loop(self):
-        # If all waypoints completed
         if self.current_goal_idx >= len(self.q_goals):
             if not hasattr(self, "done_logged"):
                 self.get_logger().info("All waypoints reached. Stopping servoing.")
@@ -103,34 +124,10 @@ class JointServoingNode(Node):
             return
 
         delta_q = self.q_goal - self.current_joints
-        vel_cmd = self.kp * delta_q + self.kd * (delta_q - self.prev_delta_q) / self.dt
+        vel_cmd = self.kp * delta_q
         vel_cmd = np.clip(vel_cmd, -0.5, 0.5)   # Velocity thresholding added here
 
-        # --- Compute current end-effector pose via FK ---
-        fk_solver = kdl.ChainFkSolverPos_recursive(self.chain)
-        current_kdl_joints = kdl.JntArray(self.num_joints)
-        for i in range(self.num_joints):
-            current_kdl_joints[i] = self.current_joints[i]
-
-        current_frame = kdl.Frame()
-        fk_solver.JntToCart(current_kdl_joints, current_frame)
-
-        current_pos = np.array([current_frame.p.x(), current_frame.p.y(), current_frame.p.z()])
-        current_quat = np.array(current_frame.M.GetQuaternion())
-
-        # --- Target pose for this waypoint ---
-        wp = self.waypoints[self.current_goal_idx]
-        target_pos = np.array(wp["pos"])
-        target_quat = np.array(wp["quat"])
-
-        # --- Compute pose errors ---
-        pos_error = np.linalg.norm(target_pos - current_pos)
-        dot = np.abs(np.dot(current_quat, target_quat))
-        dot = np.clip(dot, -1.0, 1.0)
-        ori_error = 2 * np.arccos(dot)
-
-        # --- Use pose-based tolerance instead of joint-space tolerance ---
-        if pos_error < 0.04 and ori_error < np.deg2rad(10):
+        if np.all(np.abs(delta_q) < 0.002):
             if not self.reached_goal:
                 self.get_logger().info(f"Reached waypoint {self.current_goal_idx + 1}")
                 self.reached_goal = True
@@ -141,10 +138,9 @@ class JointServoingNode(Node):
                 if self.current_goal_idx < len(self.q_goals):
                     self.q_goal = self.q_goals[self.current_goal_idx]
                     self.reached_goal = False
-                    self.get_logger().info(f"➡️ Moving to waypoint {self.current_goal_idx + 1}")
+                    self.get_logger().info(f"Moving to waypoint {self.current_goal_idx + 1}")
             vel_cmd = np.zeros_like(vel_cmd)
-        
-        self.prev_delta_q = delta_q.copy()
+
         msg = Float64MultiArray()
         msg.data = list(vel_cmd)
         self.vel_pub.publish(msg)
@@ -168,3 +164,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

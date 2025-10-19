@@ -14,7 +14,7 @@
 
         <collision name="collision">
           <geometry>
-            <mesh><uri>model://fruit_tray/meshes/Fruit_Tray.dae</uri></mesh>
+            <mesh><uri>model://fruit_tray/meshes/Fruit_Tray_Collision.dae</uri></mesh>
           </geometry>
         </collision>
 

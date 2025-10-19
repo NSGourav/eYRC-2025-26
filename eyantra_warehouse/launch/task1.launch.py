@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 ''' 
 *****************************************************************************************
-*  Filename:       world.launch.py
+*  Filename:       task1.launch.py
 *  Description:    Launch Ignition Gazebo Fortress world
-*  Modified by:    Sahil
+*  Modified by:    Joel Devasia, Sahil
 *  Author:         e-Yantra Team
 *****************************************************************************************
 '''
@@ -20,6 +20,7 @@ from launch.actions import (
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
+from launch_ros.actions import Node
 
 def generate_launch_description():
     eyantra_warehouse = get_package_share_directory("eyantra_warehouse")
@@ -39,6 +40,18 @@ def generate_launch_description():
         }.items(),
     )
 
+    bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='ebot_bridge',
+        parameters=[{
+            'config_file': os.path.join(eyantra_warehouse, 'config', 'bridge.yaml'),
+            'qos_overrides./tf_static.publisher.durability': 'transient_local',
+            'use_sim_time': True
+        }],
+        output='screen'
+    )
+
     return LaunchDescription([
         # Set resource paths for Gazebo
         AppendEnvironmentVariable(
@@ -53,4 +66,5 @@ def generate_launch_description():
         DeclareLaunchArgument("world_file", default_value=world_file),
 
         gz_sim,
+        bridge
     ])

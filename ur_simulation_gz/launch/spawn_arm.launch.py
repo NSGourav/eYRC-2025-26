@@ -199,7 +199,7 @@ def generate_launch_description():
         period=17.0,
         actions=[
             Node(
-                package='pymoveit2',
+                package='ur_simulation_gz',
                 executable='twist_servo_cal.py',
                 name='cartesian_servo_node',
                 # namespace='ur5',

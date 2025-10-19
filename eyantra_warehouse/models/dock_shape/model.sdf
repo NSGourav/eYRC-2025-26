@@ -18,6 +18,15 @@
           </geometry>
         </collision>
 
+        <sensor name='sensor_contact' type='contact'>
+          <contact>
+            <collision>collision</collision>
+            <topic>/world/eyantra_world/time</topic>
+          </contact>
+          <always_on>1</always_on>
+          <update_rate>5</update_rate>
+        </sensor>
+
     </link>
   </model>
 </sdf>

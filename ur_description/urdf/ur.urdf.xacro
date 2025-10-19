@@ -136,6 +136,16 @@
   <xacro:realsense2_camera name="camera" parent="base_link">
     <origin xyz="-1.08 0.007 1.09" rpy="0.0 0.7330383 0.0" />
 </xacro:realsense2_camera>
+ <gazebo reference="wrist_3_link">
+     <sensor name="ft_sensor" type="force_torque">
+       <always_on>true</always_on>
+       <update_rate>500</update_rate>
+       <topic>/ur5/ft_sensor</topic>
+       <force_torque>
+         <frame>child</frame>
+       </force_torque>
+     </sensor>
+   </gazebo>
 
 <!-- Remove your manual camera_link definition -->
 

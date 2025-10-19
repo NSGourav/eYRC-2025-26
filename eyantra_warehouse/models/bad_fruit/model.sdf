@@ -2,7 +2,6 @@
 
 <sdf version="1.6">
   <model name='bad_fruit'>
-    <static>true</static>
     <link name="body">
       <pose>0 0 0 0 0 0</pose>
 
@@ -14,7 +13,7 @@
 
         <collision name="collision">
           <geometry>
-            <mesh><uri>model://bad_fruit/meshes/bad_fruit.obj</uri></mesh>
+            <mesh><uri>model://bad_fruit/meshes/bad_fruit_collision.obj</uri></mesh>
           </geometry>
         </collision>
 

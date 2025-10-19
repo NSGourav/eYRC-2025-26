@@ -44,4 +44,14 @@ install(
     share/${PROJECT_NAME}/
 )
 
+install(PROGRAMS scripts/armed0/armed0.py
+ 
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY scripts/armed0/pyarmor_runtime_000000
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()

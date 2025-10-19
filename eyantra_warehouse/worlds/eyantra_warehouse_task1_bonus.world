@@ -65,39 +65,11 @@
       </sky>
     </scene>
     <gravity>0 0 -9.81</gravity>
-    <!-- Required Physics Settings -->
-    <!-- <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
-      <real_time_factor>1.0</real_time_factor>
-    </physics> -->
-
-    <!-- Essential Systems -->
-    <!-- <plugin
-      filename="ignition-gazebo-physics-system"
-      name="ignition::gazebo::systems::Physics">
-    </plugin>
-    <plugin
-      filename="ignition-gazebo-user-commands-system"
-      name="ignition::gazebo::systems::UserCommands">
-    </plugin>
-    <plugin
-      filename="ignition-gazebo-scene-broadcaster-system"
-      name="ignition::gazebo::systems::SceneBroadcaster">
-    </plugin> -->
-    <!-- <plugin filename="ignition-gazebo-imu-system"
-      name="ignition::gazebo::systems::Imu">
-    </plugin> -->
-    <!-- <plugin filename="ignition-gazebo-sensors-system"
-      name="ignition::gazebo::systems::Sensors">
-    </plugin> -->
     <plugin
       filename="libignition-gazebo-sensors-system.so"
       name="ignition::gazebo::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
-    <!-- <plugin filename="ignition-gazebo-contact-system"
-      name="ignition::gazebo::systems::Contact">
-    </plugin> -->
 
     <physics name='1ms' type='ignored'>
       <max_step_size>0.001</max_step_size>
@@ -163,17 +135,8 @@
       <pose>-0.7241 -4.0941 0.2574 1.57 0.0 0.0</pose>
       <static>true</static>
     </include>
-    <!-- drop table -->
-
-    <!-- drop table -->
-    <!-- <include>
-      <uri>model://pick_table</uri>
-      <name>pick_table</name>
-      <pose>1.5378 -6.6022 0.05 0 -0 -1.57</pose>
-  </include> -->
 
     <!-- Conveyer Belts -->
-
     <include>
       <uri>model://conveyor_belt</uri>
       <name>conveyor_belt_1</name>
@@ -222,22 +185,6 @@
       <pose>1.266 -2.5956 0.7951 0.0 0.0 0.0</pose>
     </include>
 
-    <!-- Good Fruit -->
-    <!-- <include>
-      <uri>model://good_fruit</uri>
-      <name>good_fruit</name>
-      <pose>1.1907 -2.4709 0.8418 1.57 0.0 0.0</pose>
-      <static>false</static>
-    </include> -->
-
-    <!-- Bad Fruit -->
-    <!-- <include>
-      <uri>model://bad_fruit</uri>
-      <name>bad_fruit</name>
-      <pose>1.3424 -2.4614 0.8418 1.57 0.0 0.0</pose>
-      <static>false</static>
-    </include> -->
-
     <!-- Garbage Bin -->
     <include>
       <uri>model://TrashBin</uri>
@@ -247,7 +194,6 @@
     </include>
 
     <!-- Warehouse Divider-->
-    <!-- Garbage Bin -->
     <include>
       <uri>model://warehouse_divider</uri>
       <name>warehouse_divider</name>
@@ -483,125 +429,12 @@
       <static>true</static>
     </include>
 
-
-    <!-- ########################################### -->
-
-
-    <!-- <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include>
-
-  <include>
-		<uri>model://plant_red_yellow_bell_peppers_trough</uri>
-		<name>plant_red_yellow_bell_peppers_trough_1</name>
-		<pose>0 0 0.43 0 0 -1.57</pose>
-    <static>true</static>
-	</include> -->
-
-
     <include>
       <name>warehouse_boundary</name>
       <pose>0 0 -0.21 0 0 0</pose>
       <uri>model://warehouse_boundary</uri>
       <static>true</static>
     </include>
-
-
-    <!-- <model name="plane">
-      <static>true</static>
-      <pose>-1.13 -7.455 0.39 1.57 0 0</pose>
-      <link name="link">
-        <collision name="col">
-          <geometry>
-            <box>
-              <size>8 0.8 0.1</size>
-            </box>
-          </geometry>
-        </collision>
-        <visual name="vis">
-          <geometry>
-            <box>
-              <size>8 0.8 0.1</size>
-            </box>
-          </geometry>
-          <transparency>1.0</transparency>
-        </visual>
-      </link>
-    </model>
-
-    <model name="plane2">
-      <static>true</static>
-      <pose>-1.11 3.0285 0.39 1.57 0 0</pose>
-      <link name="link">
-        <collision name="col">
-          <geometry>
-            <box>
-              <size>8 0.8 0.1</size>
-            </box>
-          </geometry>
-        </collision>
-        <visual name="vis">
-          <geometry>
-            <box>
-              <size>8 0.8 0.1</size>
-            </box>
-          </geometry>
-          <transparency>1.0</transparency>
-        </visual>
-      </link>
-    </model> -->
 
   </world>
 </sdf>

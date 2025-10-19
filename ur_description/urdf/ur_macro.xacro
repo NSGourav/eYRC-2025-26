@@ -422,21 +422,26 @@
       <mass value="0.01"/>
       <inertia ixx="1e-6" ixy="0.0" ixz="0.0" iyy="1e-6" iyz="0.0" izz="1e-6"/>
     </inertial>
+    <sensor name="wrist_ft" type="force_torque">
+    <update_rate>500</update_rate>
+    <topic>/ur5/wrist_ft</topic>
+    <force_torque>
+      <frame>child</frame>
+    </force_torque>
+  </sensor>
     </link>
 
     <gazebo reference="${tf_prefix}wrist_3_joint">
         <sensor name="force_torque_sensor" type="force_torque">
-          <always_on>true</always_on>
-          <update_rate>100</update_rate>
-          <visualize>true</visualize>
-          <topic>force_torque</topic>
-          <enable_metrics>true</enable_metrics>
-          <pose>0 0 0 0 0 0</pose>
-          <force_torque>
-            <frame>sensor</frame>
-            <measure_direction>child_to_parent</measure_direction>
-          </force_torque> 
-        </sensor>
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <visualize>true</visualize>
+        <topic>force_torque/eef</topic>
+        <force_torque>
+          <frame>sensor</frame>
+          <measure_direction>parent_to_child</measure_direction>
+        </force_torque>
+      </sensor>
     </gazebo>
 
  

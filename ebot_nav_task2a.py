@@ -16,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 # DWA-based navigation to waypoints with yaw-alignment at each waypoint
 # DWA PARAMS --> sampling + forward rollout + scoring loop
-ALPHA = 1.2                 # for more heading towards goal
-BETA = 0.8                  # for more clearance
-GAMMA = 0.6                 # for faster speeds
+ALPHA = 1.1                 # for more heading towards goal
+BETA = 0.7                  # for more clearance
+GAMMA = 0.9                 # for faster speeds
 DELTA = 1.2       # for reducing distance to current waypoint
 
 BOT_RADIUS = 0.20
@@ -26,7 +26,7 @@ SAFETY_MARGIN = 0.30
 SAFETY_DISTANCE = BOT_RADIUS + SAFETY_MARGIN
 
 V_MIN, V_MAX = 0.0, 1.0
-W_MIN, W_MAX = -1.5, 1.5
+W_MIN, W_MAX = -1.5, 1.8
 A_MIN, A_MAX = -1.0, 1.0
 AL_MIN, AL_MAX = -0.2, 0.2
 
@@ -41,7 +41,7 @@ LOOKAHEAD_INDEX_CLOSE = 0
 SMOOTHING_ALPHA = 0.7
 
 PATH_PID= (0.8, 0.0, 0.03)
-YAW_PID= (1.5, 0.0, 0.04)
+YAW_PID= (20, 0.0, 0.02)
 
 TURN_SPEED_REDUCTION_K = 0.6
 
@@ -125,6 +125,11 @@ class ebotNav(Node):
         self.current_yaw = yaw
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
+        if(self.current_x+1.5339<=0.05 and self.current_y+6.6156<=0.05):
+            init_msg = Twist()
+            init_msg.angular.z = -8.0
+            self.cmd_pub.publish(init_msg)  # rotate at start
+            time.sleep(1.5)
 
     def scan_callback(self, msg: LaserScan):
         pts = []
@@ -325,6 +330,7 @@ class ebotNav(Node):
         self.get_logger().info('Shape detected. Waiting for 2 seconds...')
         time.sleep(2.0)
         self.get_logger().info('Done waiting...Resuming navigation.')
+        self.cmd_pub.publish(Twist())
 
     @staticmethod   
     def normalize_angle(angle):

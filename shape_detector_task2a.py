@@ -14,29 +14,42 @@ import numpy as np
 from numpy.random import default_rng
 from copy import copy
 
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+
+previous_shape = type('previous', (object,), {'shape_': None, 'x_': None, 'y_': None})()
 class ShapeDetector(Node):
     def __init__(self):
         super().__init__('shape_det')
         self.shape_pub=self.create_publisher(String, '/detection_status', 10)    #Status,x,y
-        self.scan_sub=self.create_subscription(LaserScan,'/scan',self.scan_callback,10)
         self.odom_sub=self.create_subscription(Odometry,'/odom',self.odom_callback,10)
-
+        self.scan_sub=self.create_subscription(LaserScan,'/scan',self.scan_callback,10)
+        
         self.shape_status_map = {
             "triangle": "FERTILIZER_REQUIRED",
             "square": "BAD_HEALTH",
             "pentagon": "DOCK_STATION"
         }
+        self.previous_ = previous_shape
+        self.DET_BOX_size=1.2  #meters
+
+        self.position_x= -1.5339
+        self.position_y= -6.6156
+        self.orientation_yaw= 1.57
         # self.timer=self.create_timer(1.0,self.scan_callback)
 
     def scan_callback(self, msg: LaserScan):
         pts = []
         angle = msg.angle_min
-
-        fov_min = radians(-135)             # FOV in radians (±135°)
+        if(abs(self.position_x+1.5339)<=0.8 and abs(self.position_y+6.6156)<=0.8):
+            self.get_logger().info("Skipping detection at starting point.")
+            return  #skip detection at starting point to avoid false detection of walls as shapes
+        fov_min = radians(0)             # FOV in radians (±135°)
         fov_max = radians(135)
 
         for r in msg.ranges:
-            if msg.range_min < r < msg.range_max:
+            if msg.range_min < r < self.DET_BOX_size:
                 if fov_min <= angle <= fov_max:
                     x = r * cos(angle)
                     y = r * sin(angle)
@@ -49,21 +62,25 @@ class ShapeDetector(Node):
         else:
             point_array = np.empty((0, 2))
 
-        # if point_array.shape[0] > 0:        # wall filtering (adjust threshold if needed)
-        #     point_array = point_array[np.linalg.norm(point_array, axis=1) > 0.05]
-        if point_array.shape[0] > 30:
+        if point_array.shape[0] > 0:        # wall filtering (adjust threshold if needed)
+            point_array = point_array[np.linalg.norm(point_array, axis=1) > 0.05]
+        if point_array.shape[0] > 6:
             
             detected_shape,local_xy = self.detect_shape(point_array)
             if detected_shape != "unknown":
                 x_world, y_world = self.body_to_world(local_xy)
-                status_msg = String()
-                status_msg.data = self.get_status(detected_shape, x_world, y_world)
-                self.shape_pub.publish(status_msg)
-                self.get_logger().info(
-                    f"Detected {detected_shape} at world coords ({x_world:.2f}, {y_world:.2f})"
-                )
-            else:
-                self.get_logger().info("Shape not recognized.")
+                if self.previous_.shape_==None or (abs(x_world-self.previous_.x_)>=0.45 and abs(y_world-self.previous_.y_)>=0.45 and detected_shape!=self.previous_.shape_):
+                    status_msg = String()
+                    status_msg.data = self.get_status(detected_shape, x_world, y_world)
+                    self.shape_pub.publish(status_msg)
+                    self.get_logger().info(f"Detected {detected_shape} at world coords ({x_world:.2f}, {y_world:.2f})")
+                    self.previous_.shape_ = detected_shape
+                    self.previous_.x_ = x_world
+                    self.previous_.y_ = y_world
+                
+            
+            # else:
+                # self.get_logger().info("Shape not recognized.")
         else:
             self.get_logger().info("Not enough points for shape detection.")
 
@@ -71,10 +88,10 @@ class ShapeDetector(Node):
         self.position_x=msg.pose.pose.position.x
         self.position_y=msg.pose.pose.position.y
         q = msg.pose.pose.orientation
-        self.orientation_yaw=euler_from_quaternion([q.x, q.y, q.z, q.w])
+        _,_,self.orientation_yaw=euler_from_quaternion([q.x, q.y, q.z, q.w])
     
     def body_to_world(self, local_xy):
-        """Transform point from robot body frame to world frame."""
+        """To transform point from robot frame to world frame."""
         x_l, y_l = local_xy
         x_w = self.position_x + (x_l * cos(self.orientation_yaw) - y_l * sin(self.orientation_yaw))
         y_w = self.position_y + (x_l * sin(self.orientation_yaw) + y_l * cos(self.orientation_yaw))
@@ -92,9 +109,10 @@ class ShapeDetector(Node):
         slopes=[]
         line_xys=[]
         remaining_points = point_array.copy()
+        ransac_results = []
 
         for i in range(max_edges):
-            if remaining_points.shape[0] < 10:
+            if remaining_points.shape[0] < 6:
                 break
             # iterative edge fitting
             reg = RANSAC(model=LinearRegressor(), loss=square_error_loss, metric=mean_square_error)
@@ -104,6 +122,10 @@ class ShapeDetector(Node):
                 break
             slope = reg.best_fit.params[1, 0]   # [intercept, slope]
             intercept = reg.best_fit.params[0, 0]
+            ransac_results.append({
+                'slope': slope,
+                'intercept': intercept
+            })
 
             angle_deg= degrees(atan(slope))
             if len(slopes) > 0:
@@ -138,7 +160,9 @@ class ShapeDetector(Node):
         # --- Classification rules ---
         if visible_edges == 2:
             # Two edges meeting at acute or right angle → triangle
-            if any(a < 90 for a in inter_edge_angles):
+            if any(80 < a < 100 for a in inter_edge_angles):
+                detected_shape = "square"
+            elif any(30 < a < 88 for a in inter_edge_angles):
                 detected_shape = "triangle"
             else:
                 detected_shape = "unknown"
@@ -159,18 +183,51 @@ class ShapeDetector(Node):
             detected_shape = "unknown"
 
         if len(line_xys) > 0:
-            local_shape_point = tuple(map(float, line_xys[0]))
+            local_shape_point = tuple(
+                map(float, reversed([sum(coords) / len(line_xys) for coords in zip(*line_xys)]))
+            )
         else:
             local_shape_point = (0.0, 0.0)
-
-        self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
-        
+        if detected_shape != "unknown":
+            # self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
+            self.visualize_ransac_edges(point_array, ransac_results)
         return detected_shape, local_shape_point
+
+
+    def visualize_ransac_edges(self,scan_points, ransac_results, title="RANSAC Detected Edges"):
+        plt.figure(figsize=(8, 6))
+        plt.scatter(scan_points[:, 0], scan_points[:, 1], s=5, color='gray', label='LiDAR points')
+
+        colors = plt.cm.get_cmap('tab10', len(ransac_results))
+
+        for i, result in enumerate(ransac_results):
+            slope = result.get('slope')
+            intercept = result.get('intercept')
+
+            if slope is None or intercept is None:
+                continue
+
+            # Line visualization range
+            x_vals = np.linspace(np.min(scan_points[:, 0]), np.max(scan_points[:, 0]), 200)
+            y_vals = slope * x_vals + intercept
+
+            plt.plot(x_vals, y_vals, color=colors(i), linewidth=1, label=f'Edge {i+1}')
+
+
+        plt.legend()
+        plt.title(title)
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.axis('equal')
+        plt.show(block=False)  # non-blocking show
+        plt.pause(0.2)         # display for 0.2 seconds
+        plt.close()            # close figure
+
 
 rng = default_rng()
 
 class RANSAC:
-    def __init__(self, n=10, k=100, t=0.05, d=10, model=None, loss=None, metric=None):
+    def __init__(self, n=4, k=500, t=0.01, d=8, model=None, loss=None, metric=None):
         self.n = n              # `n`: Minimum number of data points to estimate parameters
         self.k = k              # `k`: Maximum iterations allowed
         self.t = t              # `t`: Threshold value to determine if points are fit well
@@ -197,6 +254,10 @@ class RANSAC:
 
             if inlier_ids.size > self.d:
                 inlier_points = np.hstack([maybe_inliers, inlier_ids])
+                x_span = X[inlier_points, 0].max() - X[inlier_points, 0].min()
+                # reject if the line is too long
+                if x_span > 0.35:
+                    continue
                 better_model = copy(self.model).fit(X[inlier_points], y[inlier_points])
 
                 this_error = self.metric(

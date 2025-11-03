@@ -45,8 +45,8 @@ class ShapeDetector(Node):
         if(abs(self.position_x+1.5339)<=0.8 and abs(self.position_y+6.6156)<=0.8):
             self.get_logger().info("Skipping detection at starting point.")
             return  #skip detection at starting point to avoid false detection of walls as shapes
-        fov_min = radians(0)             # FOV in radians (±135°)
-        fov_max = radians(135)
+        fov_min = radians(-135)             # FOV in radians (±135°)
+        fov_max = radians(0)
 
         for r in msg.ranges:
             if msg.range_min < r < self.DET_BOX_size:

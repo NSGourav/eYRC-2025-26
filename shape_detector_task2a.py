@@ -9,7 +9,7 @@ from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from tf_transformations import euler_from_quaternion
-from math import atan, cos, sin, radians, degrees, pi
+from math import atan, cos, sin, radians, degrees, pi, isfinite
 import numpy as np
 from numpy.random import default_rng
 from copy import copy
@@ -32,7 +32,7 @@ class ShapeDetector(Node):
             "pentagon": "DOCK_STATION"
         }
         self.previous_ = previous_shape
-        self.DET_BOX_size=1.2  #meters
+        self.DET_BOX_size=1.5  #meters
 
         self.position_x= -1.5339
         self.position_y= -6.6156
@@ -40,56 +40,78 @@ class ShapeDetector(Node):
         # self.timer=self.create_timer(1.0,self.scan_callback)
 
     def scan_callback(self, msg: LaserScan):
-        pts = []
+        pts_left = []
+        pts_right=[]
+        # filtering on the scan
+        scan_filtered = self.filter_scan(msg)
         angle = msg.angle_min
         if(abs(self.position_x+1.5339)<=0.8 and abs(self.position_y+6.6156)<=0.8):
             self.get_logger().info("Skipping detection at starting point.")
             return  #skip detection at starting point to avoid false detection of walls as shapes
         fov_min = radians(-135)             # FOV in radians (±135°)
-        fov_max = radians(0)
+        fov_max = radians(135)
 
-        for r in msg.ranges:
+        for r in scan_filtered:
             if msg.range_min < r < self.DET_BOX_size:
-                if fov_min <= angle <= fov_max:
-                    x = r * cos(angle)
-                    y = r * sin(angle)
-                    pts.append((x, y))
+                x = r * cos(angle)
+                y = r * sin(angle)
+                if fov_min <= angle <= 0:
+                    pts_left.append((x, y))
+                elif 0 < angle <= fov_max:
+                    pts_right.append((x, y))
             angle += msg.angle_increment
-
+        self.process_point2d(pts_left, side="left")
+        self.process_point2d(pts_right, side="right")
+        
+    def process_point2d(self, pts, side="unknown"):
         # Convert to numpy array
-        if len(pts) > 0:
-            point_array = np.array(pts)
-        else:
-            point_array = np.empty((0, 2))
-
-        if point_array.shape[0] > 0:        # wall filtering (adjust threshold if needed)
-            point_array = point_array[np.linalg.norm(point_array, axis=1) > 0.05]
-        if point_array.shape[0] > 6:
-            
+        if len(pts) == 0:
+            # self.get_logger().info(f"No points on {side} side for detection.")
+            return
+        point_array = np.array(pts)
+        point_array = point_array[np.linalg.norm(point_array, axis=1) > 0.05]
+        
+        if point_array.shape[0] > 6:   
             detected_shape,local_xy = self.detect_shape(point_array)
             if detected_shape != "unknown":
-                x_world, y_world = self.body_to_world(local_xy)
-                if self.previous_.shape_==None or (abs(x_world-self.previous_.x_)>=0.45 and abs(y_world-self.previous_.y_)>=0.45 and detected_shape!=self.previous_.shape_):
+                xy_world = self.body_to_world(local_xy)
+                xy_prev=[self.previous_.x_, self.previous_.y_]
+                if self.previous_.shape_==None or (self.euclidean_dist(xy_world, xy_prev)>=0.45 and detected_shape!=self.previous_.shape_):
                     status_msg = String()
-                    status_msg.data = self.get_status(detected_shape, x_world, y_world)
+                    status_msg.data = self.get_status(detected_shape, xy_world[0], xy_world[1])
                     self.shape_pub.publish(status_msg)
-                    self.get_logger().info(f"Detected {detected_shape} at world coords ({x_world:.2f}, {y_world:.2f})")
+                    self.get_logger().info(f"Detected {detected_shape} at world coords ({xy_world[0]:.2f}, {xy_world[1]:.2f})")
                     self.previous_.shape_ = detected_shape
-                    self.previous_.x_ = x_world
-                    self.previous_.y_ = y_world
+                    self.previous_.x_ = xy_world[0]
+                    self.previous_.y_ = xy_world[1]
                 
-            
             # else:
                 # self.get_logger().info("Shape not recognized.")
-        else:
-            self.get_logger().info("Not enough points for shape detection.")
+        # else:
+        #     self.get_logger().info("Not enough points for shape detection.")
 
     def odom_callback(self, msg: Odometry):
         self.position_x=msg.pose.pose.position.x
         self.position_y=msg.pose.pose.position.y
         q = msg.pose.pose.orientation
         _,_,self.orientation_yaw=euler_from_quaternion([q.x, q.y, q.z, q.w])
-    
+
+    def filter_scan(self, msg: LaserScan):
+        """Filter noisy or invalid ranges before edge detection."""
+        ranges = np.array(msg.ranges)
+        ranges[(ranges == 0.0) | np.isnan(ranges)] = msg.range_max
+        
+        # Example filters — tweak for your LiDAR
+        ranges = np.clip(ranges, msg.range_min, msg.range_max)  # clip out-of-range
+        ranges[ranges == 0.0] = np.nan  # ignore zero returns
+        ranges = np.nan_to_num(ranges, nan=msg.range_max)  # replace NaN with max range
+        
+        # Optional: smoothing / median filter
+        kernel = 2
+        smooth = np.convolve(ranges, np.ones(kernel)/kernel, mode='same')
+
+        return smooth
+
     def body_to_world(self, local_xy):
         """To transform point from robot frame to world frame."""
         x_l, y_l = local_xy
@@ -101,12 +123,13 @@ class ShapeDetector(Node):
         status= self.shape_status_map.get(detected_shape, "UNKNOWN_SHAPE")
         return  f"{status},{x_world:.3f},{y_world:.3f}"
     
-    def detect_shape(self, point_array, max_edges=6, parallel_angle_tol=5):
+    def detect_shape(self, point_array, max_edges=6, parallel_angle_tol=5, corner_centroid_thresh=1):
         # Detect shape (triangle, square, pentagon) from 2D lidar scan using RANSAC line fits.
         #Assumes one side is hidden by a wall, so visible edges = n-1.
         X = point_array[:, 0].reshape(-1, 1)
         y = point_array[:, 1].reshape(-1, 1)
         slopes=[]
+        line_params=[]
         line_xys=[]
         remaining_points = point_array.copy()
         ransac_results = []
@@ -114,11 +137,10 @@ class ShapeDetector(Node):
         for i in range(max_edges):
             if remaining_points.shape[0] < 6:
                 break
-            # iterative edge fitting
+            # iterative edge fitting with RANSAC
             reg = RANSAC(model=LinearRegressor(), loss=square_error_loss, metric=mean_square_error)
             reg.fit(remaining_points[:, 0].reshape(-1, 1), remaining_points[:, 1].reshape(-1, 1))
-            if reg.best_fit is None:
-                # No valid line found, stop iteration
+            if reg.best_fit is None:    # No valid line found, stop iteration
                 break
             slope = reg.best_fit.params[1, 0]   # [intercept, slope]
             intercept = reg.best_fit.params[0, 0]
@@ -126,17 +148,20 @@ class ShapeDetector(Node):
                 'slope': slope,
                 'intercept': intercept
             })
+            y_pred = reg.predict(remaining_points[:, 0].reshape(-1, 1)).flatten()
+            residuals = (remaining_points[:, 1] - y_pred) ** 2
+            inliers_mask = residuals < reg.t
 
-            angle_deg= degrees(atan(slope))
-            if len(slopes) > 0:
-                prev_angle = slopes[-1]
-                if abs(angle_deg - prev_angle) < parallel_angle_tol:
-                    # Nearly parallel → retain the last one, skip this
-                    continue
+            angle_deg= degrees(atan(slope)) if degrees(atan(slope))>=0 else degrees(atan(slope))+180
+            
+            if len(slopes) > 0 and abs(angle_deg- slopes[-1])<parallel_angle_tol:
+                # remaining_points = remaining_points[~inliers_mask]
+                continue        # nearly parallel, removing inliers as well
 
             slopes.append(angle_deg)
-        # store line point (for coordinate extraction)
-            x_mean = np.mean(remaining_points[:, 0])
+            line_params.append((slope,intercept))
+            # store line point (for coordinate extraction)
+            x_mean = float(np.mean(remaining_points[:, 0]))
             y_mean = slope * x_mean + intercept
             line_xys.append((x_mean, y_mean))
 
@@ -149,32 +174,58 @@ class ShapeDetector(Node):
         if visible_edges<2:
             return "unknown", (0.0, 0.0)
         
+        centroid = tuple(map(float, [sum(coords) / len(line_xys) for coords in zip(*line_xys)]))
+
         # Compute angle differences between consecutive edges
         inter_edge_angles = []
+        intersects=[]
+        intersect_dist=[]
         for i in range(visible_edges - 1):
-            m1 = np.tan(np.radians(slopes[i]))
-            m2 = np.tan(np.radians(slopes[i + 1]))
-            theta = abs(atan((m2 - m1) / (1 + m1 * m2)))
-            inter_edge_angles.append(degrees(theta))
+            m1, c1 = line_params[i] #np.tan(np.radians(slopes[i]))
+            m2,c2 = line_params[i+1] #np.tan(np.radians(slopes[i + 1]))
+            theta = self.angle_bw_edges(m1,m2)
+            inter_edge_angles.append(theta)
+            pt= self.intersection(m1, c1, m2, c2)
+            intersects.append(pt)
 
-        # --- Classification rules ---
-        if visible_edges == 2:
+            if(pt is not None):
+                intersect_dist.append(self.euclidean_dist(pt,centroid))
+            else:
+                intersect_dist.append(float('inf'))
+
+        detected_shape = "unknown"      # default shape
+        # Geometric Classification rules 
+        dock_pos = (0.26, -1.95)
+        valid_intersects = [pt for pt in intersects if pt is not None]
+        if not valid_intersects:
+            return "unknown", (0.0, 0.0)
+        avg_intersect = self.body_to_world(np.mean(valid_intersects, axis=0))  # returns [x_mean, y_mean]
+        dock_dist = self.euclidean_dist(centroid, dock_pos)
+        if dock_dist < 0.9:
+            detected_shape = "pentagon"
+        # Triangle- i) 2 visible edges, ii) angle between them is acute-ish (30..88), iii) their intersection is near centroid (within intersection_centroid_thresh)
+        elif visible_edges == 2:
             # Two edges meeting at acute or right angle → triangle
-            if any(80 < a < 100 for a in inter_edge_angles):
+            ang= inter_edge_angles[0] if inter_edge_angles else 0.0
+            dist= intersect_dist[0] if intersect_dist else float('inf')
+            
+            if 70 < ang < 80 and dist<= corner_centroid_thresh:    #special case for 'square' in 2 edges
                 detected_shape = "square"
-            elif any(30 < a < 88 for a in inter_edge_angles):
+            elif 30 < ang < 88 and dist<= corner_centroid_thresh:
                 detected_shape = "triangle"
             else:
                 detected_shape = "unknown"
-
+        # Square- require at least two angles close to 90° AND intersections reasonably near centroid
         elif visible_edges == 3:
             # Three edges meeting ~90° → square
-            ninety_count = sum(abs(a - 90) < 10 for a in inter_edge_angles)
-            detected_shape = "square" if ninety_count >= 2 else "unknown"
-
-        elif visible_edges <= 4:
-            # Four visible edges → likely pentagon
-            if any(100 <= a <= 120 for a in inter_edge_angles):
+            ninety_count = sum(abs(a - 90) < 12 for a in inter_edge_angles)
+            close_intersects=sum(d <= corner_centroid_thresh for d in intersect_dist)
+            detected_shape = "square" if ninety_count >= 2 and close_intersects>=1 else "unknown"
+        # Pentagon
+        elif visible_edges == 4:
+            # 1) internal inter-edge angles: pentagon adjacent-edge angles often > 100 deg
+            ang_match= any(100 <= a <= 120 for a in inter_edge_angles)
+            if ang_match:
                 detected_shape = "pentagon"
             else:
                 detected_shape = "unknown"
@@ -182,18 +233,39 @@ class ShapeDetector(Node):
         else:
             detected_shape = "unknown"
 
-        if len(line_xys) > 0:
-            local_shape_point = tuple(
-                map(float, reversed([sum(coords) / len(line_xys) for coords in zip(*line_xys)]))
-            )
-        else:
-            local_shape_point = (0.0, 0.0)
+        local_shape_point = valid_intersects[0]
+        # tuple(map(float, reversed([sum(coords) / len(line_xys) for coords in zip(*line_xys)])))
+        # else:
+        #     local_shape_point = (0.0, 0.0)
         if detected_shape != "unknown":
-            # self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
-            self.visualize_ransac_edges(point_array, ransac_results)
+            try:
+                # self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
+                self.visualize_ransac_edges(point_array, ransac_results)
+            except:
+                pass
         return detected_shape, local_shape_point
-
-
+    
+    def angle_bw_edges(self, m1, m2):
+        a1 = atan(m1)
+        a2 = atan(m2)
+        ang_deg = degrees(abs(a2 - a1))
+        
+        if ang_deg > 90:    # normalization
+            ang_deg = 180 - ang_deg
+        return ang_deg
+    
+    def intersection(self, m1, c1, m2, c2):
+        if abs(m1 - m2) < 1e-6:
+            return None
+        x = (c2 - c1) / (m1 - m2)
+        y = m1 * x + c1
+        if not (isfinite(x) and isfinite(y)):
+            return None
+        return (float(x), float(y))
+    
+    def euclidean_dist(self,a,b):
+        return (np.hypot(a[0] - b[0], a[1] - b[1]))
+    
     def visualize_ransac_edges(self,scan_points, ransac_results, title="RANSAC Detected Edges"):
         plt.figure(figsize=(8, 6))
         plt.scatter(scan_points[:, 0], scan_points[:, 1], s=5, color='gray', label='LiDAR points')
@@ -227,7 +299,7 @@ class ShapeDetector(Node):
 rng = default_rng()
 
 class RANSAC:
-    def __init__(self, n=4, k=500, t=0.01, d=8, model=None, loss=None, metric=None):
+    def __init__(self, n=4, k=500, t=0.002, d=18, model=None, loss=None, metric=None):
         self.n = n              # `n`: Minimum number of data points to estimate parameters
         self.k = k              # `k`: Maximum iterations allowed
         self.t = t              # `t`: Threshold value to determine if points are fit well
@@ -254,9 +326,10 @@ class RANSAC:
 
             if inlier_ids.size > self.d:
                 inlier_points = np.hstack([maybe_inliers, inlier_ids])
-                x_span = X[inlier_points, 0].max() - X[inlier_points, 0].min()
-                # reject if the line is too long
-                if x_span > 0.35:
+                #Euclidean span based filtering for edges
+                span = np.linalg.norm([X[inlier_points, 0].max() - X[inlier_points, 0].min(), y[inlier_points].max() - y[inlier_points].min()]
+                )
+                if span > 0.32:  # tune this for scale
                     continue
                 better_model = copy(self.model).fit(X[inlier_points], y[inlier_points])
 

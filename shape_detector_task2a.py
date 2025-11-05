@@ -32,7 +32,7 @@ class ShapeDetector(Node):
             "pentagon": "DOCK_STATION"
         }
         self.previous_ = previous_shape
-        self.DET_BOX_size=0.9  #meters
+        self.DET_BOX_size=1.2  #meters
 
         self.position_x= -1.5339
         self.position_y= -6.6156
@@ -52,9 +52,9 @@ class ShapeDetector(Node):
         fov_max = radians(135)
 
         for r in scan_filtered:
-            if msg.range_min < r < self.DET_BOX_size:
-                x = r * cos(angle)
-                y = r * sin(angle)
+            x = r * cos(angle)
+            y = r * sin(angle)
+            if -(self.DET_BOX_size-0.4) < x < (self.DET_BOX_size-0.8) and -self.DET_BOX_size < y < self.DET_BOX_size:
                 if fov_min <= angle <= 0:
                     pts_left.append((x, y))
                 elif 0 < angle <= fov_max:

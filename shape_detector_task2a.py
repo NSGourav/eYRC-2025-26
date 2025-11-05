@@ -32,7 +32,7 @@ class ShapeDetector(Node):
             "pentagon": "DOCK_STATION"
         }
         self.previous_ = previous_shape
-        self.DET_BOX_size=1.5  #meters
+        self.DET_BOX_size=0.9  #meters
 
         self.position_x= -1.5339
         self.position_y= -6.6156
@@ -45,7 +45,7 @@ class ShapeDetector(Node):
         # filtering on the scan
         scan_filtered = self.filter_scan(msg)
         angle = msg.angle_min
-        if(abs(self.position_x+1.5339)<=0.8 and abs(self.position_y+6.6156)<=0.8):
+        if(abs(self.position_x+1.5339)<=1.0 and abs(self.position_y+6.6156)<=1.0):
             self.get_logger().info("Skipping detection at starting point.")
             return  #skip detection at starting point to avoid false detection of walls as shapes
         fov_min = radians(-135)             # FOV in radians (±135°)
@@ -74,9 +74,9 @@ class ShapeDetector(Node):
         if point_array.shape[0] > 6:   
             detected_shape,local_xy = self.detect_shape(point_array)
             if detected_shape != "unknown":
-                xy_world = self.body_to_world(local_xy)
+                xy_world = local_xy #self.body_to_world(local_xy)
                 xy_prev=[self.previous_.x_, self.previous_.y_]
-                if self.previous_.shape_==None or (self.euclidean_dist(xy_world, xy_prev)>=0.45 and detected_shape!=self.previous_.shape_):
+                if self.previous_.shape_==None or (self.euclidean_dist(xy_world, xy_prev)>=0.4 and detected_shape!=self.previous_.shape_):
                     status_msg = String()
                     status_msg.data = self.get_status(detected_shape, xy_world[0], xy_world[1])
                     self.shape_pub.publish(status_msg)
@@ -121,7 +121,7 @@ class ShapeDetector(Node):
     
     def get_status(self, detected_shape,  x_world, y_world):
         status= self.shape_status_map.get(detected_shape, "UNKNOWN_SHAPE")
-        return  f"{status},{x_world:.3f},{y_world:.3f}"
+        return  f"{status},{x_world:.2f},{y_world:.2f}"
     
     def detect_shape(self, point_array, max_edges=6, parallel_angle_tol=5, corner_centroid_thresh=1):
         # Detect shape (triangle, square, pentagon) from 2D lidar scan using RANSAC line fits.
@@ -195,32 +195,33 @@ class ShapeDetector(Node):
 
         detected_shape = "unknown"      # default shape
         # Geometric Classification rules 
-        dock_pos = (0.26, -1.95)
+        pos = (self.position_x, self.position_y)
+        dock_pos=(0.26,-1.95)
         valid_intersects = [pt for pt in intersects if pt is not None]
         if not valid_intersects:
             return "unknown", (0.0, 0.0)
-        avg_intersect = self.body_to_world(np.mean(valid_intersects, axis=0))  # returns [x_mean, y_mean]
-        dock_dist = self.euclidean_dist(centroid, dock_pos)
-        if dock_dist < 0.9:
+        # avg_intersect = self.body_to_world(np.mean(valid_intersects, axis=0))  # returns [x_mean, y_mean]
+        dock_dist = self.euclidean_dist(pos, dock_pos)
+        if dock_dist < 0.25:
             detected_shape = "pentagon"
         # Triangle- i) 2 visible edges, ii) angle between them is acute-ish (30..88), iii) their intersection is near centroid (within intersection_centroid_thresh)
-        elif visible_edges == 2:
+        elif visible_edges == 2 and dock_dist>0.6:
             # Two edges meeting at acute or right angle → triangle
             ang= inter_edge_angles[0] if inter_edge_angles else 0.0
             dist= intersect_dist[0] if intersect_dist else float('inf')
             
-            if 70 < ang < 80 and dist<= corner_centroid_thresh:    #special case for 'square' in 2 edges
+            if 85 < ang <= 95 and dist<= corner_centroid_thresh:    #special case for 'square' in 2 edges
                 detected_shape = "square"
-            elif 30 < ang < 88 and dist<= corner_centroid_thresh:
+            elif 40 <= ang <= 75 and dist<= corner_centroid_thresh:
                 detected_shape = "triangle"
             else:
                 detected_shape = "unknown"
         # Square- require at least two angles close to 90° AND intersections reasonably near centroid
-        elif visible_edges == 3:
+        elif visible_edges == 3 and dock_dist>0.6:
             # Three edges meeting ~90° → square
             ninety_count = sum(abs(a - 90) < 12 for a in inter_edge_angles)
             close_intersects=sum(d <= corner_centroid_thresh for d in intersect_dist)
-            detected_shape = "square" if ninety_count >= 2 and close_intersects>=1 else "unknown"
+            detected_shape = "square" if ninety_count >= 1 and close_intersects>=1 else "unknown"
         # Pentagon
         elif visible_edges == 4:
             # 1) internal inter-edge angles: pentagon adjacent-edge angles often > 100 deg
@@ -233,17 +234,17 @@ class ShapeDetector(Node):
         else:
             detected_shape = "unknown"
 
-        local_shape_point = valid_intersects[0]
+        # local_shape_point = valid_intersects[0]
         # tuple(map(float, reversed([sum(coords) / len(line_xys) for coords in zip(*line_xys)])))
         # else:
         #     local_shape_point = (0.0, 0.0)
-        if detected_shape != "unknown":
-            try:
-                # self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
-                self.visualize_ransac_edges(point_array, ransac_results)
-            except:
-                pass
-        return detected_shape, local_shape_point
+        # if detected_shape != "unknown":
+        #     try:
+        #         # self.get_logger().info(f"Shape={detected_shape}, edges={visible_edges}, local_point={np.round(local_shape_point,3)}, angles={np.round(inter_edge_angles,1)}degrees")
+        #         self.visualize_ransac_edges(point_array, ransac_results)
+        #     except:
+        #         pass
+        return detected_shape, pos
     
     def angle_bw_edges(self, m1, m2):
         a1 = atan(m1)
@@ -299,7 +300,7 @@ class ShapeDetector(Node):
 rng = default_rng()
 
 class RANSAC:
-    def __init__(self, n=4, k=500, t=0.002, d=18, model=None, loss=None, metric=None):
+    def __init__(self, n=4, k=500, t=0.01, d=18, model=None, loss=None, metric=None):
         self.n = n              # `n`: Minimum number of data points to estimate parameters
         self.k = k              # `k`: Maximum iterations allowed
         self.t = t              # `t`: Threshold value to determine if points are fit well

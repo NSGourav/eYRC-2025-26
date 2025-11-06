@@ -22,9 +22,9 @@ previous_shape = type('previous', (object,), {'shape_': None, 'x_': None, 'y_': 
 class ShapeDetector(Node):
     def __init__(self):
         super().__init__('shape_det')
-        self.shape_pub=self.create_publisher(String, '/detection_status', 10)    #Status,x,y
         self.odom_sub=self.create_subscription(Odometry,'/odom',self.odom_callback,10)
         self.scan_sub=self.create_subscription(LaserScan,'/scan',self.scan_callback,10)
+        self.shape_pub=self.create_publisher(String, '/detection_status', 10)    # Status,x,y
         
         self.shape_status_map = {
             "triangle": "FERTILIZER_REQUIRED",
@@ -32,7 +32,7 @@ class ShapeDetector(Node):
             "pentagon": "DOCK_STATION"
         }
         self.previous_ = previous_shape
-        self.DET_BOX_size=1.2  #meters
+        self.DET_BOX_size=1.4  #meters
 
         self.position_x= -1.5339
         self.position_y= -6.6156
@@ -47,6 +47,7 @@ class ShapeDetector(Node):
         angle = msg.angle_min
         if(abs(self.position_x+1.5339)<=1.0 and abs(self.position_y+6.6156)<=1.0):
             self.get_logger().info("Skipping detection at starting point.")
+            self.previous_ = previous_shape
             return  #skip detection at starting point to avoid false detection of walls as shapes
         fov_min = radians(-135)             # FOV in radians (±135°)
         fov_max = radians(135)
@@ -54,7 +55,7 @@ class ShapeDetector(Node):
         for r in scan_filtered:
             x = r * cos(angle)
             y = r * sin(angle)
-            if -(self.DET_BOX_size-0.4) < x < (self.DET_BOX_size-0.8) and -self.DET_BOX_size < y < self.DET_BOX_size:
+            if -(self.DET_BOX_size) < x < (self.DET_BOX_size):
                 if fov_min <= angle <= 0:
                     pts_left.append((x, y))
                 elif 0 < angle <= fov_max:
@@ -71,7 +72,7 @@ class ShapeDetector(Node):
         point_array = np.array(pts)
         point_array = point_array[np.linalg.norm(point_array, axis=1) > 0.05]
         
-        if point_array.shape[0] > 6:   
+        if point_array.shape[0] > 4:   
             detected_shape,local_xy = self.detect_shape(point_array)
             if detected_shape != "unknown":
                 xy_world = local_xy #self.body_to_world(local_xy)
@@ -123,7 +124,7 @@ class ShapeDetector(Node):
         status= self.shape_status_map.get(detected_shape, "UNKNOWN_SHAPE")
         return  f"{status},{x_world:.2f},{y_world:.2f}"
     
-    def detect_shape(self, point_array, max_edges=6, parallel_angle_tol=5, corner_centroid_thresh=1):
+    def detect_shape(self, point_array, max_edges=6, parallel_angle_tol=5, corner_centroid_thresh=10.2):
         # Detect shape (triangle, square, pentagon) from 2D lidar scan using RANSAC line fits.
         #Assumes one side is hidden by a wall, so visible edges = n-1.
         X = point_array[:, 0].reshape(-1, 1)
@@ -196,34 +197,30 @@ class ShapeDetector(Node):
         detected_shape = "unknown"      # default shape
         # Geometric Classification rules 
         pos = (self.position_x, self.position_y)
-        dock_pos=(0.26,-1.95)
         valid_intersects = [pt for pt in intersects if pt is not None]
         if not valid_intersects:
             return "unknown", (0.0, 0.0)
         # avg_intersect = self.body_to_world(np.mean(valid_intersects, axis=0))  # returns [x_mean, y_mean]
-        dock_dist = self.euclidean_dist(pos, dock_pos)
-        if dock_dist < 0.25:
-            detected_shape = "pentagon"
         # Triangle- i) 2 visible edges, ii) angle between them is acute-ish (30..88), iii) their intersection is near centroid (within intersection_centroid_thresh)
-        elif visible_edges == 2 and dock_dist>0.6:
+        if visible_edges == 2 and self.previous_.shape_ != None:
             # Two edges meeting at acute or right angle → triangle
             ang= inter_edge_angles[0] if inter_edge_angles else 0.0
             dist= intersect_dist[0] if intersect_dist else float('inf')
             
-            if 85 < ang <= 95 and dist<= corner_centroid_thresh:    #special case for 'square' in 2 edges
+            if 75 < ang <= 95 and dist<= corner_centroid_thresh:    #special case for 'square' in 2 edges
                 detected_shape = "square"
             elif 40 <= ang <= 75 and dist<= corner_centroid_thresh:
                 detected_shape = "triangle"
             else:
                 detected_shape = "unknown"
         # Square- require at least two angles close to 90° AND intersections reasonably near centroid
-        elif visible_edges == 3 and dock_dist>0.6:
+        elif visible_edges == 3 and self.previous_.shape_ != None:
             # Three edges meeting ~90° → square
             ninety_count = sum(abs(a - 90) < 12 for a in inter_edge_angles)
             close_intersects=sum(d <= corner_centroid_thresh for d in intersect_dist)
             detected_shape = "square" if ninety_count >= 1 and close_intersects>=1 else "unknown"
         # Pentagon
-        elif visible_edges == 4:
+        elif visible_edges == 4 and self.previous_.shape_ != None:
             # 1) internal inter-edge angles: pentagon adjacent-edge angles often > 100 deg
             ang_match= any(100 <= a <= 120 for a in inter_edge_angles)
             if ang_match:
@@ -244,6 +241,10 @@ class ShapeDetector(Node):
         #         self.visualize_ransac_edges(point_array, ransac_results)
         #     except:
         #         pass
+        dock_pos=(0.26,-1.95)
+        dock_dist = self.euclidean_dist(pos, dock_pos)
+        if dock_dist <= 0.3:
+            detected_shape = "pentagon"
         return detected_shape, pos
     
     def angle_bw_edges(self, m1, m2):
@@ -267,24 +268,24 @@ class ShapeDetector(Node):
     def euclidean_dist(self,a,b):
         return (np.hypot(a[0] - b[0], a[1] - b[1]))
     
-    def visualize_ransac_edges(self,scan_points, ransac_results, title="RANSAC Detected Edges"):
-        plt.figure(figsize=(8, 6))
-        plt.scatter(scan_points[:, 0], scan_points[:, 1], s=5, color='gray', label='LiDAR points')
+    # def visualize_ransac_edges(self,scan_points, ransac_results, title="RANSAC Detected Edges"):
+    #     plt.figure(figsize=(8, 6))
+    #     plt.scatter(scan_points[:, 0], scan_points[:, 1], s=5, color='gray', label='LiDAR points')
 
-        colors = plt.cm.get_cmap('tab10', len(ransac_results))
+    #     colors = plt.cm.get_cmap('tab10', len(ransac_results))
 
-        for i, result in enumerate(ransac_results):
-            slope = result.get('slope')
-            intercept = result.get('intercept')
+    #     for i, result in enumerate(ransac_results):
+    #         slope = result.get('slope')
+    #         intercept = result.get('intercept')
 
-            if slope is None or intercept is None:
-                continue
+    #         if slope is None or intercept is None:
+    #             continue
 
-            # Line visualization range
-            x_vals = np.linspace(np.min(scan_points[:, 0]), np.max(scan_points[:, 0]), 200)
-            y_vals = slope * x_vals + intercept
+    #         # Line visualization range
+    #         x_vals = np.linspace(np.min(scan_points[:, 0]), np.max(scan_points[:, 0]), 200)
+    #         y_vals = slope * x_vals + intercept
 
-            plt.plot(x_vals, y_vals, color=colors(i), linewidth=1, label=f'Edge {i+1}')
+    #         plt.plot(x_vals, y_vals, color=colors(i), linewidth=1, label=f'Edge {i+1}')
 
 
         plt.legend()

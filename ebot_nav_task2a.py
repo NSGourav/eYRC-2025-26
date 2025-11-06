@@ -16,24 +16,24 @@ from concurrent.futures import ThreadPoolExecutor
 
 # DWA-based navigation to waypoints with yaw-alignment at each waypoint
 # DWA PARAMS --> sampling + forward rollout + scoring loop
-ALPHA = 1.1                 # for more heading towards goal
-BETA = 0.7                  # for more clearance
-GAMMA = 0.9                 # for faster speeds
-DELTA = 1.2       # for reducing distance to current waypoint
+ALPHA = 1.0                 # for more heading towards goal
+BETA = 0.9                  # for more clearance
+GAMMA = 1.0                 # for faster speeds
+DELTA = 1.1       # for reducing distance to current waypoint
 
 BOT_RADIUS = 0.20
-SAFETY_MARGIN = 0.30
+SAFETY_MARGIN = 0.20
 SAFETY_DISTANCE = BOT_RADIUS + SAFETY_MARGIN
 
 V_MIN, V_MAX = 0.0, 1.2
-W_MIN, W_MAX = -1.5, 1.8
+W_MIN, W_MAX = -1.8, 1.8
 A_MIN, A_MAX = -1.0, 1.0
 AL_MIN, AL_MAX = -0.2, 0.2
 
 DEL_T = 2.0
 DT = 0.05
-V_SAMPLES = 7
-W_SAMPLES = 12
+V_SAMPLES = 20
+W_SAMPLES = 16
 
 MAX_CLEARANCE_NORM = 3.0
 LOOKAHEAD_INDEX = 3
@@ -48,7 +48,7 @@ TURN_SPEED_REDUCTION_K = 0.6
 LIDAR_MIN_ANGLE = -60.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
 LIDAR_MAX_ANGLE =  60.0 * pi / 180.0
 
-TARGET_THRESH = 0.20
+TARGET_THRESH = 0.15
 YAW_THRESH = 0.05
 V_STABLE_THRESH = 0.06
 W_STABLE_THRESH = 0.06
@@ -127,7 +127,7 @@ class ebotNav(Node):
         self.curr_w = msg.twist.twist.angular.z
         if(self.current_x+1.5339<=0.05 and self.current_y+6.6156<=0.05):
             init_msg = Twist()
-            init_msg.angular.z = -8.0
+            init_msg.angular.z = -16.0
             self.cmd_pub.publish(init_msg)  # rotate at start
             time.sleep(1.5)
 

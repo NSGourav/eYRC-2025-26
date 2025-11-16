@@ -10,7 +10,6 @@ from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from tf_transformations import euler_from_quaternion
 from math import atan2, pi ,hypot, cos, sin
-# from shape_detector_task2a import ShapeDetector
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,21 +17,21 @@ from concurrent.futures import ThreadPoolExecutor
 # DWA PARAMS --> sampling + forward rollout + scoring loop
 ALPHA = 1.0                 # for more heading towards goal
 BETA = 0.9                  # for more clearance
-GAMMA = 1.0                 # for faster speeds
-DELTA = 1.1       # for reducing distance to current waypoint
+GAMMA = 0.9                 # for faster speeds
+DELTA = 1.2       # for reducing distance to current waypoint
 
 BOT_RADIUS = 0.20
-SAFETY_MARGIN = 0.20
+SAFETY_MARGIN = 0.30
 SAFETY_DISTANCE = BOT_RADIUS + SAFETY_MARGIN
 
-V_MIN, V_MAX = 0.0, 1.2
-W_MIN, W_MAX = -1.8, 1.8
+V_MIN, V_MAX = 0.0, 2.0
+W_MIN, W_MAX = -1.5, 1.5
 A_MIN, A_MAX = -1.0, 1.0
 AL_MIN, AL_MAX = -0.2, 0.2
 
 DEL_T = 2.0
 DT = 0.05
-V_SAMPLES = 20
+V_SAMPLES = 8
 W_SAMPLES = 16
 
 MAX_CLEARANCE_NORM = 3.0
@@ -41,14 +40,14 @@ LOOKAHEAD_INDEX_CLOSE = 0
 SMOOTHING_ALPHA = 0.7
 
 PATH_PID= (0.8, 0.0, 0.03)
-YAW_PID= (20, 0.0, 0.02)
+YAW_PID= (1.5, 0.0, 0.04)
 
 TURN_SPEED_REDUCTION_K = 0.6
 
 LIDAR_MIN_ANGLE = -60.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
 LIDAR_MAX_ANGLE =  60.0 * pi / 180.0
 
-TARGET_THRESH = 0.15
+TARGET_THRESH = 0.20
 YAW_THRESH = 0.05
 V_STABLE_THRESH = 0.06
 W_STABLE_THRESH = 0.06
@@ -60,7 +59,23 @@ W_PUB_MAX = W_MAX
 DIST_TOL = 0.15    # if more than this, moving to target
 MIN_TRAJ_V = 0.08   # minimal forward speed for candidate trajectories
 
-# detect=ShapeDetector()  #instance of shape detector class
+class PID:      # PID controller class
+    def __init__(self, kp, ki, kd, out_min=None, out_max=None):
+        self.kp = kp; self.ki = ki; self.kd = kd
+        self.out_min = out_min; self.out_max = out_max
+        self.integral = 0.0
+        self.prev_err = None
+    def reset(self):
+        self.integral = 0.0; self.prev_err = None
+    def update(self, e, dt):
+        if dt <= 0: return 0.0
+        deriv = 0.0 if (self.prev_err is None) else (e - self.prev_err) / dt
+        self.integral += e * dt
+        out = self.kp * e + self.ki * self.integral + self.kd * deriv
+        self.prev_err = e
+        if (self.out_min is not None) and (out < self.out_min): out = self.out_min
+        if (self.out_max is not None) and (out > self.out_max): out = self.out_max
+        return out
 
 class ebotNav(Node):
     def __init__(self):
@@ -105,18 +120,6 @@ class ebotNav(Node):
 
         self.get_logger().info("ebot_nav_task2A node started")
 
-    def shape_callback(self, msg: String):
-        self.detected_shape_status = msg.data
-        if self.detected_shape_status.startswith("DOCK_STATION"):
-            self.get_logger().info("Docking station detected. Stopping the robot.")
-            self.stop_robot()
-        elif self.detected_shape_status.startswith("FERTILIZER_REQUIRED"):
-            self.get_logger().info("Fertilizer required detected.")
-            self.hold_position()
-        elif self.detected_shape_status.startswith("BAD_HEALTH"):
-            self.get_logger().info("Bad health Detected.")
-            self.hold_position()
-
     def odom_callback(self, msg: Odometry):
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
@@ -125,7 +128,7 @@ class ebotNav(Node):
         self.current_yaw = yaw
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
-        if(self.current_x+1.5339<=0.05 and self.current_y+6.6156<=0.05):
+        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.05):
             init_msg = Twist()
             init_msg.angular.z = -16.0
             self.cmd_pub.publish(init_msg)  # rotate at start
@@ -143,6 +146,18 @@ class ebotNav(Node):
             self.obstacles = np.array(pts)
         else:
             self.obstacles = np.empty((0,2))
+
+    def shape_callback(self, msg: String):
+        self.detected_shape_status = msg.data
+        if self.detected_shape_status.startswith("DOCK_STATION"):
+            self.get_logger().info("Docking station detected. Stopping the robot.")
+            self.stop_robot()
+        elif self.detected_shape_status.startswith("FERTILIZER_REQUIRED"):
+            self.get_logger().info("Fertilizer required detected.")
+            self.hold_position()
+        elif self.detected_shape_status.startswith("BAD_HEALTH"):
+            self.get_logger().info("Bad health Detected.")
+            self.hold_position()
 
     def control_loop(self):
 
@@ -321,10 +336,7 @@ class ebotNav(Node):
         sm.angular.z = max(-W_PUB_MAX, min(W_PUB_MAX, sm.angular.z))
         self.cmd_pub.publish(sm)
         self.prev_cmd = sm
-
-    def stop_robot(self):
-        self.cmd_pub.publish(Twist())
-
+    
     def hold_position(self):
         self.cmd_pub.publish(Twist())
         self.get_logger().info('Shape detected. Waiting for 2 seconds...')
@@ -332,34 +344,14 @@ class ebotNav(Node):
         self.get_logger().info('Done waiting...Resuming navigation.')
         self.cmd_pub.publish(Twist())
 
+    def stop_robot(self):
+        self.cmd_pub.publish(Twist())
+    
     @staticmethod   
     def normalize_angle(angle):
         while angle > pi: angle -= 2.0*pi
         while angle < -pi: angle += 2.0*pi
         return angle
-
-    def __del__(self):
-        try: self.pool.shutdown(wait=False)
-        except Exception: pass
-
-
-class PID:      # PID controller class
-    def __init__(self, kp, ki, kd, out_min=None, out_max=None):
-        self.kp = kp; self.ki = ki; self.kd = kd
-        self.out_min = out_min; self.out_max = out_max
-        self.integral = 0.0
-        self.prev_err = None
-    def reset(self):
-        self.integral = 0.0; self.prev_err = None
-    def update(self, e, dt):
-        if dt <= 0: return 0.0
-        deriv = 0.0 if (self.prev_err is None) else (e - self.prev_err) / dt
-        self.integral += e * dt
-        out = self.kp * e + self.ki * self.integral + self.kd * deriv
-        self.prev_err = e
-        if (self.out_min is not None) and (out < self.out_min): out = self.out_min
-        if (self.out_max is not None) and (out > self.out_max): out = self.out_max
-        return out
 
 def main(args=None):
     rclpy.init(args=args)

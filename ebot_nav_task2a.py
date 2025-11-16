@@ -40,7 +40,7 @@ LOOKAHEAD_INDEX_CLOSE = 0
 SMOOTHING_ALPHA = 0.7
 
 PATH_PID= (0.8, 0.0, 0.03)
-YAW_PID= (1.5, 0.0, 0.04)
+YAW_PID= (20, 0.0, 0.02)
 
 TURN_SPEED_REDUCTION_K = 0.6
 
@@ -90,7 +90,6 @@ class ebotNav(Node):
         self.current_x = -1.5339
         self.current_y = -6.6156
         self.current_yaw = 1.57  # Facing forwards
-        self.laser_data = []
 
         self.waypoints = [
             [0.26, -1.95, 1.57],       # P1: (x1, y1, yaw1)
@@ -128,11 +127,10 @@ class ebotNav(Node):
         self.current_yaw = yaw
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
-        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.05):
+        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.5):
             init_msg = Twist()
-            init_msg.angular.z = -16.0
+            init_msg.angular.z = -20.0
             self.cmd_pub.publish(init_msg)  # rotate at start
-            time.sleep(1.5)
 
     def scan_callback(self, msg: LaserScan):
         pts = []
@@ -338,15 +336,20 @@ class ebotNav(Node):
         self.prev_cmd = sm
     
     def hold_position(self):
-        self.cmd_pub.publish(Twist())
-        self.get_logger().info('Shape detected. Waiting for 2 seconds...')
-        time.sleep(2.0)
-        self.get_logger().info('Done waiting...Resuming navigation.')
-        self.cmd_pub.publish(Twist())
+            hold_msg = Twist()
+            hold_msg.linear.x = 0.0
+            hold_msg.angular.z = 0.0
+            self.cmd_pub.publish(hold_msg)
+            self.get_logger().info('Shape detected. Waiting for 2 seconds...')
+            time.sleep(2.0)
+            self.get_logger().info('Done waiting...Resuming navigation.')
 
     def stop_robot(self):
-        self.cmd_pub.publish(Twist())
-    
+        stop_msg = Twist()
+        stop_msg.linear.x = 0.0
+        stop_msg.angular.z = 0.0
+        self.cmd_pub.publish(stop_msg)
+            
     @staticmethod   
     def normalize_angle(angle):
         while angle > pi: angle -= 2.0*pi

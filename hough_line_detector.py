@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-"""
-Optimized Hough Transform Line Detector
-Pure line detection - no classification (comes later)
 
-Goal: Detect clean, accurate line segments from LiDAR scans
-Strategy:
-1. Isolate target cluster (nearest compact object)
-2. Convert to high-quality binary image
-3. Apply optimized Hough Transform
-4. Aggressive merging to form long, clean lines
-5. Remove overlapping/redundant segments
-
-Output: List of distinct line segments with high accuracy
-"""
+#TODO: end_pt line1 and star_pt line2 should be at less distance : Need continuity
 
 import rclpy
 from rclpy.node import Node
@@ -28,7 +16,7 @@ class HoughLineDetector(Node):
 
         # === SCAN FILTERING ===
         self.min_range = 0.1  # Minimum valid range (m)
-        self.max_range = 3.0  # Maximum valid range (m)
+        self.max_range = 2.0  # Maximum valid range (m)
         self.median_filter_size = 5  # Larger window for better noise reduction
 
         # === HOUGH TRANSFORM PARAMETERS ===
@@ -48,14 +36,12 @@ class HoughLineDetector(Node):
         self.merge_distance_tolerance = 0.12  # meters
         self.overlap_threshold = 0.5
 
-        # === DETECTION TRACKING ===
-        # Track detected shapes to avoid duplicate detections
+        # === SAME SHAPE DETECTION TRACKING ===
         self.detected_shapes = []  # List of (position, shape_type, distance_from_robot)
         self.detection_range = 0.25  # 30cm - shapes within this range are considered same detection
 
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
 
-        # Visualization
         plt.ion()
         self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(18, 9))
 
@@ -80,26 +66,15 @@ class HoughLineDetector(Node):
         # Step 4: Detect lines using Hough Transform
         raw_lines = self.detect_lines_hough(binary_image)
         if len(raw_lines) == 0:
-            # self.get_logger().info('No lines detected')
             return
-
-        # self.get_logger().info(f'Hough detected {len(raw_lines)} raw segments')
-
-        # Step 5: Filter lines - only keep those within cluster region
         cluster_lines = self.filter_lines_in_cluster(raw_lines, cluster_points)
-        # self.get_logger().info(f'Lines in cluster: {len(cluster_lines)}')
 
         if len(cluster_lines) == 0:
-            # self.get_logger().info('No lines within cluster region')
             return
-
-        # Step 6: Merge collinear segments
         merged_lines = self.merge_collinear_segments(cluster_lines)
-        # self.get_logger().info(f'After merging: {len(merged_lines)} lines')
 
-        # Step 7: Remove overlaps
         clean_lines = self.remove_overlapping_lines(merged_lines)
-        # self.get_logger().info(f'Final clean lines: {len(clean_lines)}')
+
 
         # Step 8: Order by connectivity
         ordered_lines = self.order_lines(clean_lines)
@@ -132,21 +107,19 @@ class HoughLineDetector(Node):
 
     # ====================== FIX LINE ======================
     def detect_shape(self, lines):
-        if len(lines) == 2:
+        if len(lines) == 2 and lines[0]['length']>0.3 and lines[1]['length']<0.3:
 
             line1 = lines[0]
             line2 = lines[(1) % len(lines)]
             angle = self.calculate_angle_between_lines(line1, line2)
-            angle = 180 - angle
-            length1 = line1['length']
-            length2 = line2['length']
+            angle = 180 - angle            
             
-            
-            if(abs(angle-135)<5 and 3*length2<length1):
+            if(abs(angle-135)<5):
                 self.get_logger().info('Fucked up Triangle ')
                 print(angle)
                 return 'Triangle'
-        if len(lines) == 3:
+
+        if len(lines) == 3 and lines[1]['length']<0.3 and lines[2]['length']<0.3:
             angles = []
             for i in range(len(lines)-1):
                 line1 = lines[i]

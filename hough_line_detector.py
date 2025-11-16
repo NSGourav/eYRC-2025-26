@@ -2,6 +2,8 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -13,7 +15,7 @@ class HoughLineDetector(Node):
 
         # Scan filtering
         self.min_range = 0.1
-        self.max_range = 2.0
+        self.max_range = 1.0
         self.median_filter_size = 5
 
         # Hough parameters
@@ -33,13 +35,40 @@ class HoughLineDetector(Node):
 
         # Detection tracking
         self.detected_shapes = []
-        self.detection_range = 0.30
+        self.detection_range = 0.3
+
+        self.position_x=0.0
+        self.position_y=0.0
+        self.yaw=0.0
+
+        self.world_pos=np.array([0.0,0.0])
+
+        self.flag_print=False
+        self.shape_print=None
 
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
+        self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
+        self.shape_pub=self.create_publisher(String, '/detection_status', 10)
+
+        self.shape_status_map = {
+            "Triangle": "FERTILIZER_REQUIRED",
+            "Square": "BAD_HEALTH",
+            "Pentagon": "DOCK_STATION"
+        }
 
         plt.ion()
         self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(18, 9))
         self.get_logger().info('Hough Line Detector started')
+    
+    def odom_callback(self, msg: Odometry):
+        self.position_x=msg.pose.pose.position.x
+        self.position_y=msg.pose.pose.position.y
+
+        # Extract yaw from quaternion
+        quat = msg.pose.pose.orientation
+        siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
+        cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
+        self.yaw = math.atan2(siny_cosp, cosy_cosp)
 
     def scan_callback(self, msg):
         all_points = self.scan_to_points(msg)
@@ -73,16 +102,28 @@ class HoughLineDetector(Node):
         shape_position = np.mean([[l['start'], l['end']] for l in best_group], axis=(0,1))
         shape_distance = np.linalg.norm(shape_position)
         shape_type = self.detect_shape(best_group)
+        if self.flag_print==True:
 
+                # if  math.sqrt((self.world_pos[0]-self.position_x)**2 +(self.world_pos[1]-self.position_y)**2) < 10.6:
+                if abs(self.world_pos[1]-self.position_y)<0.02:
+                    status_msg = String()
+                    status_msg.data = f"{self.shape_print},{self.position_x},{self.position_y}"
+                    self.shape_pub.publish(status_msg)
+                    self.flag_print=False
         if shape_type and shape_type in ['Pentagon', 'Square', 'Triangle']:
-            if self.is_new_detection(shape_position):
+            is_new, self.world_pos = self.is_new_detection(shape_position)
+            if is_new:
+                self.shape_print=self.shape_status_map.get(shape_type)
+                self.flag_print=True
                 self.detected_shapes.append({
-                    'position': shape_position,
+                    'local_position': shape_position,
+                    'world_position': self.world_pos,
                     'type': shape_type,
                     'distance': shape_distance
                 })
-                self.get_logger().info(f'NEW: {shape_type} at ({shape_position[0]:.2f}, {shape_position[1]:.2f}), {shape_distance:.2f}m')
+                self.get_logger().info(f'NEW: {shape_type} at local({shape_position[0]:.2f}, {shape_position[1]:.2f}), world({self.world_pos[0]:.2f}, {self.world_pos[1]:.2f})')
                 self.get_logger().info(f'Total: {len(self.detected_shapes)}')
+
             else:
                 shape_type = f'{shape_type} (Already Detected)'
 
@@ -95,8 +136,8 @@ class HoughLineDetector(Node):
             angle = 180 - angle
             dist = math.sqrt((lines[0]['end'][0]-lines[1]['start'][0])**2 +
                            (lines[0]['end'][1]-lines[1]['start'][1])**2)
-            if abs(angle-135)<5 and dist<0.02:
-                self.get_logger().info('Detected Fuckedup Triangle')
+            if abs(angle-135)<5 and dist<0.03:
+                self.get_logger().info('Detected Triangle')
                 print(angle)
                 return 'Triangle'
 
@@ -110,16 +151,38 @@ class HoughLineDetector(Node):
 
         if len(lines) == 4:
             angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(len(lines)-1)]
+            for i in range(len(lines)-1):
+                dist= math.sqrt((lines[i]['end'][0]-lines[i+1]['start'][0])**2 +
+                               (lines[i]['end'][1]-lines[i+1]['start'][1])**2)
+                if dist>0.03:
+                    return None
             if abs(angles[0]-130)<7 and abs(angles[1]-90)<5 and abs(angles[2]-130)<7:
                 self.get_logger().info('Detected Triangle')
                 print(angles)
                 return 'Triangle'
 
-    def is_new_detection(self, current_position):
+    def local_to_world(self, local_pos):
+        """Convert local robot frame coordinates to world coordinates"""
+        # Rotation matrix
+        cos_yaw = math.cos(self.yaw)
+        sin_yaw = math.sin(self.yaw)
+
+        # Transform: world = robot_world_pos + rotation * local
+        world_x = self.position_x + (local_pos[0] * cos_yaw - local_pos[1] * sin_yaw)
+        world_y = self.position_y + (local_pos[0] * sin_yaw + local_pos[1] * cos_yaw)
+
+        return np.array([world_x, world_y])
+
+    def is_new_detection(self, local_position):
+        """Check if shape at local position is new based on world coordinates"""
+        # Convert local position to world coordinates
+        world_position = self.local_to_world(local_position)
+
         for detected in self.detected_shapes:
-            if np.linalg.norm(current_position - detected['position']) < self.detection_range:
-                return False
-        return True
+            # Compare world coordinates
+            if np.linalg.norm(world_position - detected['world_position']) < self.detection_range:
+                return False, world_position
+        return True, world_position
 
     def filter_by_distance(self, points, max_dist):
         return points[np.linalg.norm(points, axis=1) <= max_dist]

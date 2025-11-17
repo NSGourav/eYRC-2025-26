@@ -15,11 +15,11 @@ from math import atan2, pi ,hypot, cos, sin
 # DWA PARAMS --> sampling + forward rollout + scoring loop
 ALPHA = 1.0                 # for more heading towards goal
 BETA = 0.9                  # for more clearance
-GAMMA = 1.2                 # for faster speeds
+GAMMA = 1.5                 # for faster speeds
 DELTA = 0.9       # for reducing distance to current waypoint
 
-BOT_RADIUS = 0.20
-SAFETY_MARGIN = 0.30
+BOT_RADIUS = 0.25
+SAFETY_MARGIN = 0.15
 SAFETY_DISTANCE = BOT_RADIUS + SAFETY_MARGIN
 
 V_MIN, V_MAX = 0.0, 2.0
@@ -42,10 +42,10 @@ YAW_PID= (20, 0.0, 0.02)
 
 TURN_SPEED_REDUCTION_K = 0.6
 
-LIDAR_MIN_ANGLE = -60.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
-LIDAR_MAX_ANGLE =  60.0 * pi / 180.0
+LIDAR_MIN_ANGLE = -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
+LIDAR_MAX_ANGLE =  70.0 * pi / 180.0
 
-TARGET_THRESH = 0.20
+TARGET_THRESH = 0.15
 YAW_THRESH = 0.05
 V_STABLE_THRESH = 0.06
 W_STABLE_THRESH = 0.06
@@ -112,7 +112,7 @@ class ebotNav(Node):
 
         self.last_all_trajs = []
         self.last_best_traj = None
-
+        self.start_time = time.time()
         self.get_logger().info("ebot_nav_task2A node started")
 
     def odom_callback(self, msg: Odometry):
@@ -123,10 +123,6 @@ class ebotNav(Node):
         self.current_yaw = yaw
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
-        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.5):
-            init_msg = Twist()
-            init_msg.angular.z = -20.0
-            self.cmd_pub.publish(init_msg)  # rotate at start
 
     def scan_callback(self, msg: LaserScan):
         pts = []
@@ -156,9 +152,16 @@ class ebotNav(Node):
     def control_loop(self):
 
         if self.w_index >= len(self.waypoints):
-            self.stop_robot(); 
-            self.get_logger().info("All waypoints reached."); 
-            self.timer.cancel(); 
+            self.stop_robot()
+            self.get_logger().info("All waypoints reached.")
+            self.get_logger().info(f"Total navigation time: {(time.time() - self.start_time):.2f} seconds")
+            self.timer.cancel()
+            return
+        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.5):
+            init_msg = Twist()
+            init_msg.linear.x = 0.0
+            init_msg.angular.z = -16.0
+            self.cmd_pub.publish(init_msg)  # rotate at start
             return
 
         x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
@@ -201,7 +204,7 @@ class ebotNav(Node):
 
         if best_traj is None or len(best_traj) == 0:
             cmd = Twist(); cmd.linear.x = 0.0; cmd.angular.z = 0.4
-            self.publish_smoothed(cmd); 
+            self.publish_smoothed(cmd)
             return
 
         # lookahead
@@ -320,6 +323,7 @@ class ebotNav(Node):
         sm.angular.z = max(-W_PUB_MAX, min(W_PUB_MAX, sm.angular.z))
         self.cmd_pub.publish(sm)
         self.prev_cmd = sm
+        # self.cmd_pub.publish(cmd)
     
     def hold_position(self):
             hold_msg = Twist()

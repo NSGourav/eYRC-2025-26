@@ -11,14 +11,12 @@ from sensor_msgs.msg import LaserScan
 from tf_transformations import euler_from_quaternion
 from math import atan2, pi ,hypot, cos, sin
 
-from concurrent.futures import ThreadPoolExecutor
-
 # DWA-based navigation to waypoints with yaw-alignment at each waypoint
 # DWA PARAMS --> sampling + forward rollout + scoring loop
 ALPHA = 1.0                 # for more heading towards goal
 BETA = 0.9                  # for more clearance
-GAMMA = 0.9                 # for faster speeds
-DELTA = 1.2       # for reducing distance to current waypoint
+GAMMA = 1.2                 # for faster speeds
+DELTA = 0.9       # for reducing distance to current waypoint
 
 BOT_RADIUS = 0.20
 SAFETY_MARGIN = 0.30
@@ -31,7 +29,7 @@ AL_MIN, AL_MAX = -0.2, 0.2
 
 DEL_T = 2.0
 DT = 0.05
-V_SAMPLES = 8
+V_SAMPLES = 9
 W_SAMPLES = 16
 
 MAX_CLEARANCE_NORM = 3.0
@@ -90,6 +88,7 @@ class ebotNav(Node):
         self.current_x = -1.5339
         self.current_y = -6.6156
         self.current_yaw = 1.57  # Facing forwards
+        self.detected_shape_status = None
 
         self.waypoints = [
             [0.26, -1.95, 1.57],       # P1: (x1, y1, yaw1)
@@ -97,9 +96,6 @@ class ebotNav(Node):
             [-1.53, -6.61, -1.57]        # P3: (x3, y3, yaw3)
         ]
         self.w_index=0
-                
-        cpu_count = os.cpu_count() or 1
-        self.pool = ThreadPoolExecutor(max_workers=min(32, cpu_count + 4))
 
         self.curr_vx = 0.0; self.curr_w = 0.0
         self.obstacles = np.empty((0,2))
@@ -229,6 +225,7 @@ class ebotNav(Node):
 
     # DWA with progress and minimal-speed 
     def dwa_modified(self, x_goal, y_goal, dist_to_goal):
+        """DWA - sequential evaluation"""
         enforced_v_min = V_MIN
         if dist_to_goal > DIST_TOL:
             enforced_v_min = max(enforced_v_min, MIN_TRAJ_V)
@@ -250,77 +247,66 @@ class ebotNav(Node):
         best_score = -float('inf'); best_v = 0.0; best_w = 0.0
         valid_count = 0
         best_progress = 0.0
-
         current_dist = hypot(self.current_x - x_goal, self.current_y - y_goal)
-
-        def evaluate_pair(v0, w0):
-            xi, yi, theta = self.current_x, self.current_y, self.current_yaw
-            traj_points = []; min_clearance = float('inf'); collision = False
-            steps = int(DEL_T / DT)
-            for _ in range(steps):
-                xi += v0 * cos(theta) * DT
-                yi += v0 * sin(theta) * DT
-                theta = (theta + w0 * DT + pi) % (2 * pi) - pi
-
-                if len(self.obstacles) > 0:
-                    dx = xi - self.current_x; dy = yi - self.current_y
-                    xr = cos(-self.current_yaw) * dx - sin(-self.current_yaw) * dy
-                    yr = sin(-self.current_yaw) * dx + cos(-self.current_yaw) * dy
-                    dists = np.sqrt((self.obstacles[:,0] - xr)**2 + (self.obstacles[:,1] - yr)**2)
-                    step_min = float(np.min(dists)); min_clearance = min(min_clearance, step_min)
-                    if step_min < SAFETY_DISTANCE:
-                        collision = True; break
-                traj_points.append((xi, yi, theta))
-
-            if collision or len(traj_points) == 0:
-                return (-float('inf'), v0, w0, traj_points, 0.0, 0.0)
-
-            xf, yf, th_f = traj_points[-1]
-            heading_angle = atan2(y_goal - yf, x_goal - xf)
-            heading_diff = self.normalize_angle(heading_angle - th_f)
-            heading_score_norm = 1.0 - abs(heading_diff) / pi
-
-            if min_clearance == float('inf'):
-                clearance_norm = 1.0
-            else:
-                clearance_clamped = min(min_clearance, MAX_CLEARANCE_NORM)
-                clearance_norm = clearance_clamped / MAX_CLEARANCE_NORM
-
-            v_norm = 0.0
-            if V_MAX - V_MIN > 1e-6:
-                v_norm = (v0 - V_MIN) / (V_MAX - V_MIN)
-                v_norm = np.clip(v_norm, 0.0, 1.0)
-
-            final_dist = hypot(xf - x_goal, yf - y_goal)
-            raw_progress = max(0.0, (current_dist - final_dist))  # +ve if distance reduced
-            
-            denom = max(1e-3, current_dist)     
-            progress_norm = np.clip(raw_progress / denom, 0.0, 1.0)     # normalization of progress by current_dist
-
-            # combined score (higher is better)
-            score = ALPHA * heading_score_norm + BETA * clearance_norm + GAMMA * v_norm + DELTA * progress_norm
-            return (score, v0, w0, traj_points, min_clearance, progress_norm)
-
-        # Multithreading: submission of all (v0,w0) pairs to thread pool
-        futures = []
+        # Sequential evaluation (no threading)
         for v0 in v_samples:
             for w0 in w_samples:
-                futures.append(self.pool.submit(evaluate_pair, float(v0), float(w0)))
-
-        for f in futures:
-            try:
-                score, v0, w0, traj_points, min_clearance, progress_norm = f.result()
-            except Exception as e:
-                self.get_logger().warning(f"DWA worker failed: {e}")
-                continue
-
-            if traj_points:
+                xi, yi, theta = self.current_x, self.current_y, self.current_yaw
+                traj_points = []
+                min_clearance = float('inf')
+                collision = False
+                steps = int(DEL_T / DT)
+                # Simulate trajectory
+                for _ in range(steps):
+                    xi += v0 * cos(theta) * DT
+                    yi += v0 * sin(theta) * DT
+                    theta = (theta + w0 * DT + pi) % (2 * pi) - pi
+                    # Collision check
+                    if len(self.obstacles) > 0:
+                        dx = xi - self.current_x
+                        dy = yi - self.current_y
+                        xr = cos(-self.current_yaw) * dx - sin(-self.current_yaw) * dy
+                        yr = sin(-self.current_yaw) * dx + cos(-self.current_yaw) * dy
+                        dists = np.sqrt((self.obstacles[:,0] - xr)**2 + (self.obstacles[:,1] - yr)**2)
+                        step_min = float(np.min(dists))
+                        min_clearance = min(min_clearance, step_min)
+                        if step_min < SAFETY_DISTANCE:
+                            collision = True
+                            break
+                    traj_points.append((xi, yi, theta))
+                # Skip if collision or no valid trajectory
+                if collision or len(traj_points) == 0:
+                    continue
+                # Score the trajectory
+                xf, yf, th_f = traj_points[-1]
+                heading_angle = atan2(y_goal - yf, x_goal - xf)
+                heading_diff = self.normalize_angle(heading_angle - th_f)
+                heading_score_norm = 1.0 - abs(heading_diff) / pi
+                if min_clearance == float('inf'):
+                    clearance_norm = 1.0
+                else:
+                    clearance_clamped = min(min_clearance, MAX_CLEARANCE_NORM)
+                    clearance_norm = clearance_clamped / MAX_CLEARANCE_NORM
+                v_norm = 0.0
+                if V_MAX - V_MIN > 1e-6:
+                    v_norm = (v0 - V_MIN) / (V_MAX - V_MIN)
+                    v_norm = np.clip(v_norm, 0.0, 1.0)
+                final_dist = hypot(xf - x_goal, yf - y_goal)
+                raw_progress = max(0.0, (current_dist - final_dist))
+                denom = max(1e-3, current_dist)
+                progress_norm = np.clip(raw_progress / denom, 0.0, 1.0)
+                # Combined score
+                score = ALPHA * heading_score_norm + BETA * clearance_norm + GAMMA * v_norm + DELTA * progress_norm
+                # Store trajectory
                 all_trajs.append(traj_points)
                 valid_count += 1
-
-            if score > best_score:
-                best_score = score; best_v = v0; best_w = w0; best_traj = traj_points; best_progress = progress_norm
-
+                # Update best trajectory
+                if score > best_score:
+                    best_score = score
+                    best_v = v0
+                    best_w = w0
+                    best_traj = traj_points
+                    best_progress = progress_norm
         info = {'valid_count': valid_count, 'best_score': best_score, 'best_v': best_v, 'best_w': best_w, 'best_prog': best_progress}
         if best_traj is None:
             return 0.0, 0.0, all_trajs, None, info

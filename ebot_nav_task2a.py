@@ -55,7 +55,7 @@ V_PUB_MAX = V_MAX
 W_PUB_MAX = W_MAX
 
 DIST_TOL = 0.15    # if more than this, moving to target
-MIN_TRAJ_V = 0.08   # minimal forward speed for candidate trajectories
+MIN_TRAJ_V = 0.3  # minimal forward speed for candidate trajectories
 
 class PID:      # PID controller class
     def __init__(self, kp, ki, kd, out_min=None, out_max=None):
@@ -140,13 +140,13 @@ class ebotNav(Node):
     def shape_callback(self, msg: String):
         self.detected_shape_status = msg.data
         if self.detected_shape_status.startswith("DOCK_STATION"):
-            self.get_logger().info("Docking station detected. Stopping the robot.")
+            self.get_logger().info(f"{msg}, Docking station detected. Stopping the robot.")
             self.stop_robot()
         elif self.detected_shape_status.startswith("FERTILIZER_REQUIRED"):
-            self.get_logger().info("Fertilizer required detected.")
+            self.get_logger().info(f"{msg}, Fertilizer required detected.")
             self.hold_position()
         elif self.detected_shape_status.startswith("BAD_HEALTH"):
-            self.get_logger().info("Bad health Detected.")
+            self.get_logger().info(f"{msg}, Bad health Detected.")
             self.hold_position()
 
     def control_loop(self):
@@ -157,10 +157,10 @@ class ebotNav(Node):
             self.get_logger().info(f"Total navigation time: {(time.time() - self.start_time):.2f} seconds")
             self.timer.cancel()
             return
-        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.5):
+        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.2):
             init_msg = Twist()
             init_msg.linear.x = 0.0
-            init_msg.angular.z = -16.0
+            init_msg.angular.z = -2.0
             self.cmd_pub.publish(init_msg)  # rotate at start
             return
 
@@ -319,11 +319,11 @@ class ebotNav(Node):
         sm = Twist()
         sm.linear.x = SMOOTHING_ALPHA * cmd.linear.x + (1.0 - SMOOTHING_ALPHA) * self.prev_cmd.linear.x
         sm.angular.z = SMOOTHING_ALPHA * cmd.angular.z + (1.0 - SMOOTHING_ALPHA) * self.prev_cmd.angular.z
-        sm.linear.x = max(0.0, min(V_PUB_MAX, sm.linear.x))
+        # sm.linear.x = max(0.0, min(V_PUB_MAX, sm.linear.x))
         sm.angular.z = max(-W_PUB_MAX, min(W_PUB_MAX, sm.angular.z))
         self.cmd_pub.publish(sm)
         self.prev_cmd = sm
-        # self.cmd_pub.publish(cmd)
+        # self.get_logger().info(f"Published cmd_vel: v={sm.linear.x:.2f}, w={sm.angular.z:.2f}")
     
     def hold_position(self):
             hold_msg = Twist()

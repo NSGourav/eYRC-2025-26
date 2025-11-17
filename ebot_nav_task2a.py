@@ -83,7 +83,7 @@ class ebotNav(Node):
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.shape_sub = self.create_subscription(String, '/detection_status', self.shape_callback, 10)
-
+        self.flag_stop=False
         # Robot initial state
         self.current_x = -1.5339
         self.current_y = -6.6156
@@ -144,12 +144,16 @@ class ebotNav(Node):
             self.stop_robot()
         elif self.detected_shape_status.startswith("FERTILIZER_REQUIRED"):
             self.get_logger().info(f"{msg}, Fertilizer required detected.")
+            self.flag_stop=True
             self.hold_position()
         elif self.detected_shape_status.startswith("BAD_HEALTH"):
             self.get_logger().info(f"{msg}, Bad health Detected.")
+            self.flag_stop=True
             self.hold_position()
 
     def control_loop(self):
+        if self.flag_stop:
+            return
 
         if self.w_index >= len(self.waypoints):
             self.stop_robot()
@@ -333,6 +337,7 @@ class ebotNav(Node):
             self.get_logger().info('Shape detected. Waiting for 2 seconds...')
             time.sleep(2.0)
             self.get_logger().info('Done waiting...Resuming navigation.')
+            self.flag_stop=False
 
     def stop_robot(self):
         stop_msg = Twist()

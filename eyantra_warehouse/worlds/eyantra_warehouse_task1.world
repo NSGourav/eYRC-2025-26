@@ -72,10 +72,7 @@
       name="ignition::gazebo::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
-    <plugin
-      filename="/usr/lib/x86_64-linux-gnu/ign-gazebo-6/plugins/libignition_link_attacher.so"
-      name="ignition_link_attacher">
-    </plugin>
+
     <plugin filename="ignition-gazebo-contact-system"
       name="ignition::gazebo::systems::Contact">
     </plugin>

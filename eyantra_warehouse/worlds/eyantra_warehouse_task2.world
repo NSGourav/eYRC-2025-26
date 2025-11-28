@@ -91,10 +91,6 @@
       name="ignition_link_attacher">
     </plugin>
     
-        <!-- <plugin
-      filename="/home/joel/kc25_ws/dev-sim_ws/install/ros2_linkattacher/lib/libignition_link_attacher.so"
-      name="ignition_link_attacher">
-    </plugin> -->
     <include>
       <name>ground_plane</name>
       <pose>-1.065 -2.417 0.0 0 0 0</pose>

@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
 import os
+import time
+import numpy as np
 import rclpy
 from rclpy.node import Node
-import numpy as np
 from geometry_msgs.msg import Twist #, Point
 from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from tf_transformations import euler_from_quaternion
 from math import atan2, pi ,hypot, cos, sin
 
-from concurrent.futures import ThreadPoolExecutor
-
 # DWA-based navigation to waypoints with yaw-alignment at each waypoint
 # DWA PARAMS --> sampling + forward rollout + scoring loop
 ALPHA = 1.0                 # for more heading towards goal
-BETA = 0.8                  # for more clearance
-GAMMA = 0.6                 # for faster speeds
-DELTA = 1.2       # for reducing distance to current waypoint
+BETA = 0.9                  # for more clearance
+GAMMA = 1.5                 # for faster speeds
+DELTA = 0.9       # for reducing distance to current waypoint
 
-BOT_RADIUS = 0.20
-SAFETY_MARGIN = 0.30
+BOT_RADIUS = 0.25
+SAFETY_MARGIN = 0.15
 SAFETY_DISTANCE = BOT_RADIUS + SAFETY_MARGIN
 
-V_MIN, V_MAX = 0.0, 1.0
+V_MIN, V_MAX = 0.0, 2.0
 W_MIN, W_MAX = -1.5, 1.5
 A_MIN, A_MAX = -1.0, 1.0
 AL_MIN, AL_MAX = -0.2, 0.2
 
 DEL_T = 2.0
 DT = 0.05
-V_SAMPLES = 7
-W_SAMPLES = 12
+V_SAMPLES = 9
+W_SAMPLES = 16
 
 MAX_CLEARANCE_NORM = 3.0
 LOOKAHEAD_INDEX = 3
@@ -38,14 +38,14 @@ LOOKAHEAD_INDEX_CLOSE = 0
 SMOOTHING_ALPHA = 0.7
 
 PATH_PID= (0.8, 0.0, 0.03)
-YAW_PID= (1.5, 0.0, 0.04)
+YAW_PID= (20, 0.0, 0.02)
 
 TURN_SPEED_REDUCTION_K = 0.6
 
-LIDAR_MIN_ANGLE = -60.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
-LIDAR_MAX_ANGLE =  60.0 * pi / 180.0
+LIDAR_MIN_ANGLE = -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
+LIDAR_MAX_ANGLE =  70.0 * pi / 180.0
 
-TARGET_THRESH = 0.20
+TARGET_THRESH = 0.15
 YAW_THRESH = 0.05
 V_STABLE_THRESH = 0.06
 W_STABLE_THRESH = 0.06
@@ -55,7 +55,7 @@ V_PUB_MAX = V_MAX
 W_PUB_MAX = W_MAX
 
 DIST_TOL = 0.15    # if more than this, moving to target
-MIN_TRAJ_V = 0.08   # minimal forward speed for candidate trajectories
+MIN_TRAJ_V = 0.3  # minimal forward speed for candidate trajectories
 
 class PID:      # PID controller class
     def __init__(self, kp, ki, kd, out_min=None, out_max=None):
@@ -77,26 +77,28 @@ class PID:      # PID controller class
 
 class ebotNav(Node):
     def __init__(self):
-        super().__init__('ebot_nav_task1A')
+        super().__init__('ebot_nav_task2A')
 
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
-        
-        cpu_count = os.cpu_count() or 1
-        self.pool = ThreadPoolExecutor(max_workers=min(32, cpu_count + 4))
-
-        # state
-        self.current_x = 0.0; self.current_y = 0.0; self.current_yaw = 0.0
-        self.curr_vx = 0.0; self.curr_w = 0.0
-        self.obstacles = np.empty((0,2))
+        self.shape_sub = self.create_subscription(String, '/detection_status', self.shape_callback, 10)
+        self.flag_stop=False
+        # Robot initial state
+        self.current_x = -1.5339
+        self.current_y = -6.6156
+        self.current_yaw = 1.57  # Facing forwards
+        self.detected_shape_status = None
 
         self.waypoints = [
-            (-1.53, -1.95, 1.57),
-            (0.13,  1.24, 0.0),
-            (0.38, -3.32, -1.57)
+            [0.26, -1.95, 1.57],       # P1: (x1, y1, yaw1)
+            [-1.48, -0.67, -1.57],          # P2: (x2, y2, yaw2)
+            [-1.53, -6.61, -1.57]        # P3: (x3, y3, yaw3)
         ]
-        self.w_index = 0
+        self.w_index=0
+
+        self.curr_vx = 0.0; self.curr_w = 0.0
+        self.obstacles = np.empty((0,2))
 
         kp, ki, kd = PATH_PID
         self.lateral_pid = PID(kp, ki, kd, out_min=-1.5, out_max=1.5)
@@ -110,8 +112,8 @@ class ebotNav(Node):
 
         self.last_all_trajs = []
         self.last_best_traj = None
-
-        self.get_logger().info("ebot_nav_task1A node started")
+        self.start_time = time.time()
+        self.get_logger().info("ebot_nav_task2A node started")
 
     def odom_callback(self, msg: Odometry):
         self.current_x = msg.pose.pose.position.x
@@ -135,12 +137,35 @@ class ebotNav(Node):
         else:
             self.obstacles = np.empty((0,2))
 
+    def shape_callback(self, msg: String):
+        self.detected_shape_status = msg.data
+        if self.detected_shape_status.startswith("DOCK_STATION"):
+            self.get_logger().info(f"{msg}, Docking station detected. Stopping the robot.")
+            self.stop_robot()
+        elif self.detected_shape_status.startswith("FERTILIZER_REQUIRED"):
+            self.get_logger().info(f"{msg}, Fertilizer required detected.")
+            self.flag_stop=True
+            self.hold_position()
+        elif self.detected_shape_status.startswith("BAD_HEALTH"):
+            self.get_logger().info(f"{msg}, Bad health Detected.")
+            self.flag_stop=True
+            self.hold_position()
+
     def control_loop(self):
+        if self.flag_stop:
+            return
 
         if self.w_index >= len(self.waypoints):
-            self.stop_robot(); 
-            self.get_logger().info("All waypoints reached."); 
-            self.timer.cancel(); 
+            self.stop_robot()
+            self.get_logger().info("All waypoints reached.")
+            self.get_logger().info(f"Total navigation time: {(time.time() - self.start_time):.2f} seconds")
+            self.timer.cancel()
+            return
+        if(hypot(self.current_x+1.5339, self.current_y+6.6156)<=0.1 and self.current_yaw>=0.2):
+            init_msg = Twist()
+            init_msg.linear.x = 0.0
+            init_msg.angular.z = -2.0
+            self.cmd_pub.publish(init_msg)  # rotate at start
             return
 
         x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
@@ -183,7 +208,7 @@ class ebotNav(Node):
 
         if best_traj is None or len(best_traj) == 0:
             cmd = Twist(); cmd.linear.x = 0.0; cmd.angular.z = 0.4
-            self.publish_smoothed(cmd); 
+            self.publish_smoothed(cmd)
             return
 
         # lookahead
@@ -207,6 +232,7 @@ class ebotNav(Node):
 
     # DWA with progress and minimal-speed 
     def dwa_modified(self, x_goal, y_goal, dist_to_goal):
+        """DWA - sequential evaluation"""
         enforced_v_min = V_MIN
         if dist_to_goal > DIST_TOL:
             enforced_v_min = max(enforced_v_min, MIN_TRAJ_V)
@@ -228,77 +254,66 @@ class ebotNav(Node):
         best_score = -float('inf'); best_v = 0.0; best_w = 0.0
         valid_count = 0
         best_progress = 0.0
-
         current_dist = hypot(self.current_x - x_goal, self.current_y - y_goal)
-
-        def evaluate_pair(v0, w0):
-            xi, yi, theta = self.current_x, self.current_y, self.current_yaw
-            traj_points = []; min_clearance = float('inf'); collision = False
-            steps = int(DEL_T / DT)
-            for _ in range(steps):
-                xi += v0 * cos(theta) * DT
-                yi += v0 * sin(theta) * DT
-                theta = (theta + w0 * DT + pi) % (2 * pi) - pi
-
-                if len(self.obstacles) > 0:
-                    dx = xi - self.current_x; dy = yi - self.current_y
-                    xr = cos(-self.current_yaw) * dx - sin(-self.current_yaw) * dy
-                    yr = sin(-self.current_yaw) * dx + cos(-self.current_yaw) * dy
-                    dists = np.sqrt((self.obstacles[:,0] - xr)**2 + (self.obstacles[:,1] - yr)**2)
-                    step_min = float(np.min(dists)); min_clearance = min(min_clearance, step_min)
-                    if step_min < SAFETY_DISTANCE:
-                        collision = True; break
-                traj_points.append((xi, yi, theta))
-
-            if collision or len(traj_points) == 0:
-                return (-float('inf'), v0, w0, traj_points, 0.0, 0.0)
-
-            xf, yf, th_f = traj_points[-1]
-            heading_angle = atan2(y_goal - yf, x_goal - xf)
-            heading_diff = self.normalize_angle(heading_angle - th_f)
-            heading_score_norm = 1.0 - abs(heading_diff) / pi
-
-            if min_clearance == float('inf'):
-                clearance_norm = 1.0
-            else:
-                clearance_clamped = min(min_clearance, MAX_CLEARANCE_NORM)
-                clearance_norm = clearance_clamped / MAX_CLEARANCE_NORM
-
-            v_norm = 0.0
-            if V_MAX - V_MIN > 1e-6:
-                v_norm = (v0 - V_MIN) / (V_MAX - V_MIN)
-                v_norm = np.clip(v_norm, 0.0, 1.0)
-
-            final_dist = hypot(xf - x_goal, yf - y_goal)
-            raw_progress = max(0.0, (current_dist - final_dist))  # +ve if distance reduced
-            
-            denom = max(1e-3, current_dist)     
-            progress_norm = np.clip(raw_progress / denom, 0.0, 1.0)     # normalization of progress by current_dist
-
-            # combined score (higher is better)
-            score = ALPHA * heading_score_norm + BETA * clearance_norm + GAMMA * v_norm + DELTA * progress_norm
-            return (score, v0, w0, traj_points, min_clearance, progress_norm)
-
-        # Multithreading: submission of all (v0,w0) pairs to thread pool
-        futures = []
+        # Sequential evaluation (no threading)
         for v0 in v_samples:
             for w0 in w_samples:
-                futures.append(self.pool.submit(evaluate_pair, float(v0), float(w0)))
-
-        for f in futures:
-            try:
-                score, v0, w0, traj_points, min_clearance, progress_norm = f.result()
-            except Exception as e:
-                self.get_logger().warning(f"DWA worker failed: {e}")
-                continue
-
-            if traj_points:
+                xi, yi, theta = self.current_x, self.current_y, self.current_yaw
+                traj_points = []
+                min_clearance = float('inf')
+                collision = False
+                steps = int(DEL_T / DT)
+                # Simulate trajectory
+                for _ in range(steps):
+                    xi += v0 * cos(theta) * DT
+                    yi += v0 * sin(theta) * DT
+                    theta = (theta + w0 * DT + pi) % (2 * pi) - pi
+                    # Collision check
+                    if len(self.obstacles) > 0:
+                        dx = xi - self.current_x
+                        dy = yi - self.current_y
+                        xr = cos(-self.current_yaw) * dx - sin(-self.current_yaw) * dy
+                        yr = sin(-self.current_yaw) * dx + cos(-self.current_yaw) * dy
+                        dists = np.sqrt((self.obstacles[:,0] - xr)**2 + (self.obstacles[:,1] - yr)**2)
+                        step_min = float(np.min(dists))
+                        min_clearance = min(min_clearance, step_min)
+                        if step_min < SAFETY_DISTANCE:
+                            collision = True
+                            break
+                    traj_points.append((xi, yi, theta))
+                # Skip if collision or no valid trajectory
+                if collision or len(traj_points) == 0:
+                    continue
+                # Score the trajectory
+                xf, yf, th_f = traj_points[-1]
+                heading_angle = atan2(y_goal - yf, x_goal - xf)
+                heading_diff = self.normalize_angle(heading_angle - th_f)
+                heading_score_norm = 1.0 - abs(heading_diff) / pi
+                if min_clearance == float('inf'):
+                    clearance_norm = 1.0
+                else:
+                    clearance_clamped = min(min_clearance, MAX_CLEARANCE_NORM)
+                    clearance_norm = clearance_clamped / MAX_CLEARANCE_NORM
+                v_norm = 0.0
+                if V_MAX - V_MIN > 1e-6:
+                    v_norm = (v0 - V_MIN) / (V_MAX - V_MIN)
+                    v_norm = np.clip(v_norm, 0.0, 1.0)
+                final_dist = hypot(xf - x_goal, yf - y_goal)
+                raw_progress = max(0.0, (current_dist - final_dist))
+                denom = max(1e-3, current_dist)
+                progress_norm = np.clip(raw_progress / denom, 0.0, 1.0)
+                # Combined score
+                score = ALPHA * heading_score_norm + BETA * clearance_norm + GAMMA * v_norm + DELTA * progress_norm
+                # Store trajectory
                 all_trajs.append(traj_points)
                 valid_count += 1
-
-            if score > best_score:
-                best_score = score; best_v = v0; best_w = w0; best_traj = traj_points; best_progress = progress_norm
-
+                # Update best trajectory
+                if score > best_score:
+                    best_score = score
+                    best_v = v0
+                    best_w = w0
+                    best_traj = traj_points
+                    best_progress = progress_norm
         info = {'valid_count': valid_count, 'best_score': best_score, 'best_v': best_v, 'best_w': best_w, 'best_prog': best_progress}
         if best_traj is None:
             return 0.0, 0.0, all_trajs, None, info
@@ -308,23 +323,33 @@ class ebotNav(Node):
         sm = Twist()
         sm.linear.x = SMOOTHING_ALPHA * cmd.linear.x + (1.0 - SMOOTHING_ALPHA) * self.prev_cmd.linear.x
         sm.angular.z = SMOOTHING_ALPHA * cmd.angular.z + (1.0 - SMOOTHING_ALPHA) * self.prev_cmd.angular.z
-        sm.linear.x = max(0.0, min(V_PUB_MAX, sm.linear.x))
+        # sm.linear.x = max(0.0, min(V_PUB_MAX, sm.linear.x))
         sm.angular.z = max(-W_PUB_MAX, min(W_PUB_MAX, sm.angular.z))
         self.cmd_pub.publish(sm)
         self.prev_cmd = sm
+        # self.get_logger().info(f"Published cmd_vel: v={sm.linear.x:.2f}, w={sm.angular.z:.2f}")
+    
+    def hold_position(self):
+            hold_msg = Twist()
+            hold_msg.linear.x = 0.0
+            hold_msg.angular.z = 0.0
+            self.cmd_pub.publish(hold_msg)
+            self.get_logger().info('Shape detected. Waiting for 2 seconds...')
+            time.sleep(2.0)
+            self.get_logger().info('Done waiting...Resuming navigation.')
+            self.flag_stop=False
 
     def stop_robot(self):
-        self.cmd_pub.publish(Twist())
-    
+        stop_msg = Twist()
+        stop_msg.linear.x = 0.0
+        stop_msg.angular.z = 0.0
+        self.cmd_pub.publish(stop_msg)
+            
     @staticmethod   
     def normalize_angle(angle):
         while angle > pi: angle -= 2.0*pi
         while angle < -pi: angle += 2.0*pi
         return angle
-
-    def __del__(self):
-        try: self.pool.shutdown(wait=False)
-        except Exception: pass
 
 def main(args=None):
     rclpy.init(args=args)

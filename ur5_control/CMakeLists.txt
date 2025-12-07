@@ -27,6 +27,10 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS
+    src/Task2B_aruco_perception.py
+    DESTINATION lib/${PROJECT_NAME}
+)
+install(PROGRAMS
     src/task1c.py
     DESTINATION lib/${PROJECT_NAME}
 )

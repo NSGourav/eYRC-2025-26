@@ -52,8 +52,8 @@ class FruitsTF(Node):
         self.cb_group = ReentrantCallbackGroup()
 
         # Subscriptions
-        self.create_subscription(Image, '/camera/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)             
-        self.create_subscription(Image, '/camera/depth/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)       
+        self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)             
+        self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depthimagecb, 10, callback_group=self.cb_group)       
 
         # Timer for periodic processing
         self.create_timer(0.2, self.process_image, callback_group=self.cb_group)

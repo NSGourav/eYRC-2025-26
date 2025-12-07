@@ -237,14 +237,15 @@ class aruco_tf(Node):
             t_obj.header.stamp = self.get_clock().now().to_msg()
             t_obj.header.frame_id = 'base_link'
             if marker_id == 3:
-                t_obj.child_frame_id = f'{self.team_id}_fertiliser_can'
-            else :
+                t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
+            else : 
+                #pass
                 t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 
             # copy translation and rotation from lookup
             t_obj.transform.translation = base_to_obj.transform.translation
             t_obj.transform.rotation = base_to_obj.transform.rotation
-            # self.br.sendTransform(t_obj)
+            self.br.sendTransform(t_obj)
 
             pos = base_to_obj.transform.translation
             quat = base_to_obj.transform.rotation

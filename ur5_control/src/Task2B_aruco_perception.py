@@ -125,7 +125,7 @@ class aruco_tf(Node):
         ############ Topic SUBSCRIPTIONS ############
 
         self.color_cam_sub = self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10)
-        self.depth_cam_sub = self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depthimagecb, 10)
+        self.depth_cam_sub = self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10)
 
         ############ Constructor VARIABLES/OBJECTS ############
 
@@ -191,7 +191,7 @@ class aruco_tf(Node):
 
                 # Get depth value at marker center (in millimeters)
                 depth_mm = self.depth_image[int(cY), int(cX)]
-                c = float(depth_mm)
+                c = float(depth_mm)/1000.0  # Convert mm to meters
 
                 # Convert 2D pixel to 3D depth coordinates in camera frame
                 x = c * (sizeCamX - cX - centerCamX) / focalX

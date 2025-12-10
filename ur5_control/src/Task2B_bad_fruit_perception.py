@@ -53,7 +53,7 @@ class FruitsTF(Node):
 
         # Subscriptions
         self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)             
-        self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depthimagecb, 10, callback_group=self.cb_group)       
+        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)       
 
         # Timer for periodic processing
         self.create_timer(0.2, self.process_image, callback_group=self.cb_group)
@@ -80,59 +80,83 @@ class FruitsTF(Node):
         try:
             # Convert ROS Image to OpenCV RGB format
             self.cv_image = self.bridge.imgmsg_to_cv2(data, desired_encoding ='bgr8')
-            self.cv_image = cv2.cvtColor(self.cv_image, cv2.COLOR_RGB2BGR)
+            # self.cv_image = cv2.cvtColor(self.cv_image, cv2.COLOR_RGB2BGR)
         except CvBridgeError as e:
             self.get_logger().error(f"Color image conversion failed: {e}")
             self.cv_image = None
 
     def bad_fruit_detection(self, bgr_image):
-
         bad_fruits = []
-
-        # Convert BGR to HSV color space
+        
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-        # Define HSV range for bad fruits (grayish color)
-        # H (Hue): 86-106 (cyan to blue range), S (Saturation): 0-40 (low saturation = grayish), V (Value): 100-180 (medium brightness)
-        lower_hsv = np.array([86, 0, 100])    
-        upper_hsv = np.array([106, 40, 180])
-
-        # Create binary mask: white pixels = bad fruit color, black = everything else
-        mask = cv2.inRange(hsv, lower_hsv, upper_hsv)
-
-        # Find boundaries of white regions in the mask
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # STEP 1: Green mask for all fruits
+        lower_green = np.array([45, 70, 170])
+        upper_green = np.array([60, 100, 195])
+        green_mask = cv2.inRange(hsv, lower_green, upper_green)
+        
+        # STEP 2: Grey/brown mask (LOW saturation = grey appearance)
+        lower_grey = np.array([0, 0, 60])
+        upper_grey = np.array([180, 45, 160])
+        grey_mask = cv2.inRange(hsv, lower_grey, upper_grey)
+        
+        # Find contours in GREEN mask
+        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         fruit_id = 0
         for cnt in contours:
-            # Calculate contour area to filter out noise
             area = cv2.contourArea(cnt)
-            if area < 100:
+            if area < 10 or area > 5000:
                 continue
-
-            # Get bounding rectangle around the contour
+            
             x, y, w, h = cv2.boundingRect(cnt)
+            
+            # STEP 3: Create ring around the fruit
+            inner_mask = np.zeros(grey_mask.shape, dtype=np.uint8)
+            cv2.drawContours(inner_mask, [cnt], -1, 255, -1)
+                   
+            # Create ring (doughnut shape) around fruit
+            kernel = np.ones((20, 20), np.uint8)  # Adjust for ring thickness
+            outer_mask = cv2.dilate(inner_mask, kernel, iterations=1)
+            ring_mask = cv2.subtract(outer_mask, inner_mask)
+            
+            # STEP 4: Check for grey in the ring (semi-ring is fine!)
+            grey_in_ring = cv2.bitwise_and(grey_mask, ring_mask)
+            grey_pixel_count = np.count_nonzero(grey_in_ring)
+            
+            ring_area = np.count_nonzero(ring_mask)
+            grey_percentage = (grey_pixel_count / ring_area) * 100 if ring_area > 0 else 0
+                        
+            # STEP 5: Lower threshold for semi-ring detection
+            # Even a small amount of grey on the edge = bad fruit
+            GREY_THRESHOLD = 5.0  # Lower threshold (5-10%) to catch partial grey edges
+            
+            if grey_percentage < GREY_THRESHOLD:
+                continue
+                        
+            # Calculate center
             cX = x + w // 2
             cY = y + h // 2
-
-            # Get depth value at the center pixel
+            
+            # Get depth and angle
+            distance = 0.0
+            angle = 0.0
             if self.depth_image is not None:
                 distance = float(self.depth_image[cY, cX])
-                # Calculate horizontal angle from camera center
                 angle = np.degrees(np.arctan((cX - self.centerCamX) / self.focalX))
-
-            # Store fruit information
+            
             fruit_info = {
                 'center': (cX, cY),
                 'distance': distance,
                 'angle': angle,
                 'width': w,
-                'id': fruit_id
+                'id': fruit_id,
+                'grey_percentage': grey_percentage
             }
             bad_fruits.append(fruit_info)
             fruit_id += 1
-
+        
         return bad_fruits
-
     def process_image(self):
 
         self.sizeCamX = 1280
@@ -150,7 +174,7 @@ class FruitsTF(Node):
         # Step 1: Detect bad fruits
         center_fruit_list = self.bad_fruit_detection(bgr_image)
 
-        rgb_image = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2RGB)
+        # rgb_image = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2RGB)
 
         # Process each detected fruit
         for fruit in center_fruit_list:
@@ -161,15 +185,15 @@ class FruitsTF(Node):
             w = fruit['width']
             x1, y1 = cX - w//2, cY - w//2
             x2, y2 = cX + w//2, cY + w//2
-            cv2.rectangle(rgb_image, (x1, y1), (x2, y2), (0, 255, 0), 2)    # Green box
-            cv2.putText(rgb_image, "bad_fruit", (x1, y1 - 10),
+            cv2.rectangle(bgr_image, (x1, y1), (x2, y2), (0, 255, 0), 2)    # Green box
+            cv2.putText(bgr_image, "bad_fruit", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)      # Red label
 
 
             # Step 2: Get depth at fruit center
             distance_from_rgb = 0.0
             if self.depth_image is not None:
-                distance_from_rgb = float(self.depth_image[cY, cX])  # in meters
+                distance_from_rgb = float(self.depth_image[cY, cX])/1000.0  # in meters
 
             # Step 3: Convert 2D pixel coordinates to 3D depth coordinates
             x = distance_from_rgb * (self.sizeCamX - cX - self.centerCamX) / self.focalX
@@ -178,7 +202,7 @@ class FruitsTF(Node):
             # print(f"Fruit ID: {fruit_id}, X: {x:.3f} m, Y: {y:.3f} m, Z: {z:.3f} m")
 
             # Step 4: Draw center on image
-            cv2.circle(rgb_image, (cX, cY), 5, (0, 255, 0), -1)
+            cv2.circle(bgr_image, (cX, cY), 5, (0, 255, 0), -1)
 
             # Step 5: Publish TF from camera_link to fruit frame
             t_cam = TransformStamped()
@@ -218,8 +242,8 @@ class FruitsTF(Node):
             self.tf_broadcaster.sendTransform(t_base)
 
         # Step 8: Show annotated image
-        # cv2.imshow('Detected Bad Fruits', rgb_image)
-        # cv2.waitKey(1)
+        cv2.imshow('Detected Bad Fruits', bgr_image)
+        cv2.waitKey(1)
 
 
 def main(args=None):

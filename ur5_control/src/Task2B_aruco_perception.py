@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
- 
+
 # Team ID:          [ eYRC#5076 ]
 # Author List:		[ Nagulapalli Shavaneeth Gourav, Pradeep J, Anand Vardhan, Raj Mohammad ]
 # Filename:		    Task2B_aruco_perception.py
@@ -11,7 +11,7 @@
 #                   Subscribing Topics - [ /camera/image_raw, /camera/depth/image_raw ]
 
 ################### IMPORT MODULES #######################
- 
+
 import rclpy
 import sys
 import cv2
@@ -36,7 +36,7 @@ def calculate_rectangle_area(coordinates):
     BR=(int(BR[0]),int(BR[1]))
     TL=(int(TL[0]),int(TL[1]))
     BL=(int(BL[0]),int(BL[1]))
-    
+
     length=math.sqrt((TR[0]-TL[0])**2 + (TR[1]-TL[1])**2)
     width=math.sqrt((TR[0]-BR[0])**2 + (TR[1]-BR[1])**2)
 
@@ -64,11 +64,11 @@ def detect_aruco(image):
     width_aruco_list = []
     ids = []
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) 
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Load ArUco dictionary (4x4 markers with 50 unique IDs)
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    aruco_params = cv2.aruco.DetectorParameters() 
+    aruco_params = cv2.aruco.DetectorParameters()
 
     # Create detector and find markers in the image
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
@@ -81,19 +81,19 @@ def detect_aruco(image):
     cv2.aruco.drawDetectedMarkers(image, corners, ids)
 
     for i in range(len(ids)):
-        c = corners[i][0] 
+        c = corners[i][0]
         area, width = calculate_rectangle_area(c)
         width_aruco_list.append(width)
 
         if area < aruco_area_threshold:
-            continue  
+            continue
 
         # Estimate pose (position and orientation) of the marker
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             corners, size_of_aruco_m, cam_mat, dist_mat
         )
 
-        # Calculate center point of the marker by averaging corner coordinates        
+        # Calculate center point of the marker by averaging corner coordinates
         center = np.mean(c, axis=0)
         center_aruco_list.append(center)
 
@@ -124,8 +124,8 @@ class aruco_tf(Node):
 
         ############ Topic SUBSCRIPTIONS ############
 
-        self.color_cam_sub = self.create_subscription(Image, '/camera/image_raw', self.colorimagecb, 10)
-        self.depth_cam_sub = self.create_subscription(Image, '/camera/depth/image_raw', self.depthimagecb, 10)
+        self.color_cam_sub = self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10)
+        self.depth_cam_sub = self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10)
 
         ############ Constructor VARIABLES/OBJECTS ############
 
@@ -135,7 +135,7 @@ class aruco_tf(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.br = tf2_ros.TransformBroadcaster(self)                                    # object as transform broadcaster to send transform wrt some frame_id
         self.timer = self.create_timer(image_processing_rate, self.process_image)       # creating a timer based function which gets called on every 0.2 seconds (as defined by 'image_processing_rate' variable)
-        
+
         self.cv_image = None                                                            # colour raw image variable (from colorimagecb())
         self.depth_image = None                                                         # depth image variable (from depthimagecb())
         self.team_id = "5076"                                                           # Team ID
@@ -159,11 +159,13 @@ class aruco_tf(Node):
         # Camera parameters for depth-to-3D conversion
         sizeCamX = 1280
         sizeCamY = 720
-        centerCamX = 640 
+        centerCamX = 640
         centerCamY = 360
         focalX = 931.1829833984375
         focalY = 931.1829833984375
- 
+
+        self.get_logger().info("Inside process image timer")
+
         if self.cv_image is None or self.depth_image is None:
             return
 
@@ -184,12 +186,12 @@ class aruco_tf(Node):
                 q_rot = [0.0, -0.7068252, 0.0, 0.7068252]
                 r_quat = R.from_quat([qx, qy, qz, qw])
                 r_rot = R.from_quat(q_rot)
-                r_combined = r_quat * r_rot 
+                r_combined = r_quat * r_rot
                 q_combined = r_combined.as_quat()
 
                 # Get depth value at marker center (in millimeters)
                 depth_mm = self.depth_image[int(cY), int(cX)]
-                c = float(depth_mm)
+                c = float(depth_mm)/1000.0  # Convert mm to meters
 
                 # Convert 2D pixel to 3D depth coordinates in camera frame
                 x = c * (sizeCamX - cX - centerCamX) / focalX
@@ -235,8 +237,9 @@ class aruco_tf(Node):
             t_obj.header.stamp = self.get_clock().now().to_msg()
             t_obj.header.frame_id = 'base_link'
             if marker_id == 3:
-                t_obj.child_frame_id = f'{self.team_id}_fertiliser_can'
-            else :
+                t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
+            else : 
+                #pass
                 t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 
             # copy translation and rotation from lookup
@@ -252,7 +255,7 @@ class aruco_tf(Node):
                 f'"quat": [{quat.x:.3f}, {quat.y:.3f}, {quat.z:.3f}, {quat.w:.3f}]}}')
 
         # cv2.imshow("Detected ArUco Markers", self.cv_image)
-        # cv2.waitKey(1) 
+        # cv2.waitKey(1)
 
 def main():
 

@@ -26,6 +26,7 @@ install(PROGRAMS
     src/task1b_boiler_plate.py
     src/Task2B_aruco_perception.py
     src/Task2B_bad_fruit_perception.py
+    src/Task3A_fruits_fert_tfs.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS

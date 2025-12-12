@@ -17,7 +17,7 @@
 *
 *****************************************************************************************
 '''
-  
+
 # Team ID:          [ eYRC#5076 ]
 # Author List:		[ Nagulapalli Shavaneeth Gourav, Pradeep J, Anand Vardhan, Raj Mohammad ]
 # Filename:		    Task3A_fruits_fert_tfs.py
@@ -29,13 +29,13 @@
 
 import rclpy
 import cv2
-import numpy as np 
+import numpy as np
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError 
+from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import TransformStamped
-from tf2_ros import TransformBroadcaster, Buffer, TransformListener 
+from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
 import tf_transformations
 import tf2_ros
@@ -141,7 +141,7 @@ def detect_aruco(image):
 class FruitsFertTF(Node):
 
     def __init__(self):
-        
+
         """Initialize the FruitsTF node with subscribers, publishers, and TF components."""
         super().__init__('fruits_fert_tf')
 
@@ -149,11 +149,11 @@ class FruitsFertTF(Node):
         image_processing_rate = 0.2                                                     # rate of time to process image (seconds)
         self.bridge = CvBridge()                                                        # initialise CvBridge object for image conversion
         self.cv_image = None                                                            # colour raw image variable (from colorimagecb())
-        self.depth_image = None    
+        self.depth_image = None
 
         self.br = tf2_ros.TransformBroadcaster(self)                                    # object as transform broadcaster to send transform wrt some frame_id
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.tf_buffer = Buffer()                                               
+        self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.team_id = "5076"
 
@@ -164,9 +164,9 @@ class FruitsFertTF(Node):
         self.focalX = 915.3003540039062
         self.focalY = 914.0320434570312
 
-    
-        self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)             
-        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)   
+
+        self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)
+        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)
         self.create_timer(image_processing_rate, self.bad_fruit_processing, callback_group=self.cb_group)
         self.create_timer(image_processing_rate, self.aruco_processing, callback_group=self.cb_group)
 
@@ -192,19 +192,19 @@ class FruitsFertTF(Node):
 
     def bad_fruit_detection(self, bgr_image):
         bad_fruits = []
-        
+
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-        
+
         # STEP 1: Green mask for all fruits
         lower_green = np.array([45, 70, 170])
         upper_green = np.array([60, 100, 195])
         green_mask = cv2.inRange(hsv, lower_green, upper_green)
-        
+
         # STEP 2: Grey/brown mask (LOW saturation = grey appearance)
         lower_grey = np.array([0, 0, 60])
         upper_grey = np.array([180, 45, 160])
         grey_mask = cv2.inRange(hsv, lower_grey, upper_grey)
-        
+
         # Find contours in GREEN mask
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -213,43 +213,43 @@ class FruitsFertTF(Node):
             area = cv2.contourArea(cnt)
             if area < 10 or area > 5000:
                 continue
-            
+
             x, y, w, h = cv2.boundingRect(cnt)
-            
+
             # STEP 3: Create ring around the fruit
             inner_mask = np.zeros(grey_mask.shape, dtype=np.uint8)
             cv2.drawContours(inner_mask, [cnt], -1, 255, -1)
-                   
+
             # Create ring (doughnut shape) around fruit
             kernel = np.ones((20, 20), np.uint8)  # Adjust for ring thickness
             outer_mask = cv2.dilate(inner_mask, kernel, iterations=1)
             ring_mask = cv2.subtract(outer_mask, inner_mask)
-            
+
             # STEP 4: Check for grey in the ring
             grey_in_ring = cv2.bitwise_and(grey_mask, ring_mask)
             grey_pixel_count = np.count_nonzero(grey_in_ring)
-            
+
             ring_area = np.count_nonzero(ring_mask)
             grey_percentage = (grey_pixel_count / ring_area) * 100 if ring_area > 0 else 0
-                        
+
             # STEP 5: Lower threshold for semi-ring detection
             # Even a small amount of grey on the edge = bad fruit
             GREY_THRESHOLD = 5.0  # Lower threshold (5-10%) to catch partial grey edges
-            
+
             if grey_percentage < GREY_THRESHOLD:
                 continue
-                        
+
             # Calculate center
             cX = x + w // 2
             cY = y + h // 2
-            
+
             # Get depth and angle
             distance = 0.0
             angle = 0.0
             if self.depth_image is not None:
                 distance = float(self.depth_image[cY, cX])
                 angle = np.degrees(np.arctan((cX - self.centerCamX) / self.focalX))
-            
+
             fruit_info = {
                 'center': (cX, cY),
                 'distance': distance,
@@ -260,9 +260,9 @@ class FruitsFertTF(Node):
             }
             bad_fruits.append(fruit_info)
             fruit_id += 1
-        
+
         return bad_fruits
-    
+
 
     def bad_fruit_processing(self):
 
@@ -317,7 +317,7 @@ class FruitsFertTF(Node):
                     'base_link',
                     t_cam.child_frame_id,
                     now
-                )   
+                )
             except Exception as e:
                 self.get_logger().warn(f"TF lookup failed for fruit {fruit_id}: {e}")
                 continue
@@ -326,7 +326,7 @@ class FruitsFertTF(Node):
             t_base.header.stamp = self.get_clock().now().to_msg()
             t_base.header.frame_id = 'base_link'
             t_base.child_frame_id = f'{self.team_id}_bad_fruit_{fruit_id}'
-            t_base.transform = trans.transform 
+            t_base.transform = trans.transform
             self.tf_broadcaster.sendTransform(t_base)
 
         cv2.imshow('Detected Bad Fruits', bgr_image)
@@ -343,45 +343,48 @@ class FruitsFertTF(Node):
             return
 
         for i in range(len(ids)):
-            marker_id = int(ids[i][0])      # get ID value
-            cX, cY = center_aruco_list[i]   # marker center in pixels
+            try:
+                marker_id = int(ids[i][0])      # get ID value
+                cX, cY = center_aruco_list[i]   # marker center in pixels
 
-            quat_angles = angle_aruco_list[i]  # full quaternion from detection
-            qx, qy, qz, qw = quat_angles
+                quat_angles = angle_aruco_list[i]  # full quaternion from detection
+                qx, qy, qz, qw = quat_angles
 
-            # Apply camera frame rotation
-            q_rot = [0.0, -0.7068252, 0.0, 0.7068252]
-            r_quat = R.from_quat([qx, qy, qz, qw])
-            r_rot = R.from_quat(q_rot)
-            r_combined = r_quat * r_rot
-            q_combined = r_combined.as_quat()
+                # Apply camera frame rotation
+                q_rot = [0.0, -0.7068252, 0.0, 0.7068252]
+                r_quat = R.from_quat([qx, qy, qz, qw])
+                r_rot = R.from_quat(q_rot)
+                r_combined = r_quat * r_rot
+                q_combined = r_combined.as_quat()
 
-            # Get depth value at marker center (in millimeters)
-            depth_mm = self.depth_image[int(cY), int(cX)]
-            c = float(depth_mm)/1000.0  # Convert mm to meters
+                # Get depth value at marker center (in millimeters)
+                depth_mm = self.depth_image[int(cY), int(cX)]
+                c = float(depth_mm)/1000.0  # Convert mm to meters
 
-            # Convert 2D pixel to 3D depth coordinates in camera frame
-            x = c * (self.sizeCamX - cX - self.centerCamX) / self.focalX
-            y = c * (self.sizeCamY - cY - self.centerCamY) / self.focalY
-            z = c
+                # Convert 2D pixel to 3D depth coordinates in camera frame
+                x = c * (self.sizeCamX - cX - self.centerCamX) / self.focalX
+                y = c * (self.sizeCamY - cY - self.centerCamY) / self.focalY
+                z = c
 
-            cv2.circle(self.cv_image, (int(cX), int(cY)), radius=5, color=(0, 0, 255), thickness=-1)
+                cv2.circle(self.cv_image, (int(cX), int(cY)), radius=5, color=(0, 0, 255), thickness=-1)
 
-            # Create transform from camera_link to marker
-            t = TransformStamped()
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.header.frame_id = 'camera_link'
-            t.child_frame_id = f'cam_{marker_id}'
+                # Create transform from camera_link to marker
+                t = TransformStamped()
+                t.header.stamp = self.get_clock().now().to_msg()
+                t.header.frame_id = 'camera_link'
+                t.child_frame_id = f'cam_{marker_id}'
 
-            t.transform.translation.x = z
-            t.transform.translation.y = x
-            t.transform.translation.z = y
+                t.transform.translation.x = z
+                t.transform.translation.y = x
+                t.transform.translation.z = y
 
-            t.transform.rotation.x = q_combined[0]
-            t.transform.rotation.y = q_combined[1]
-            t.transform.rotation.z = q_combined[2]
-            t.transform.rotation.w = q_combined[3]
-            self.br.sendTransform(t)
+                t.transform.rotation.x = q_combined[0]
+                t.transform.rotation.y = q_combined[1]
+                t.transform.rotation.z = q_combined[2]
+                t.transform.rotation.w = q_combined[3]
+                self.br.sendTransform(t)
+            except:
+                print("No id found")
 
             try:
                 obj_frame = f'{self.team_id}_cam_{marker_id}'                          # child frame in camera_link
@@ -399,7 +402,7 @@ class FruitsFertTF(Node):
                 t_obj.header.frame_id = 'base_link'
                 if marker_id == 3:
                     t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
-                else : 
+                else :
                     t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 
                 t_obj.transform.translation = base_to_obj.transform.translation

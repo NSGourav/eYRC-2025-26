@@ -233,26 +233,30 @@ class aruco_tf(Node):
                     continue
             except:
                 print("Error in processing marker ID:", ids[i])
-            t_obj = TransformStamped()
-            t_obj.header.stamp = self.get_clock().now().to_msg()
-            t_obj.header.frame_id = 'base_link'
-            if marker_id == 3:
-                t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
-            else : 
-                #pass
-                t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 
-            # copy translation and rotation from lookup
-            t_obj.transform.translation = base_to_obj.transform.translation
-            t_obj.transform.rotation = base_to_obj.transform.rotation
-            self.br.sendTransform(t_obj)
+            try:
+                t_obj = TransformStamped()
+                t_obj.header.stamp = self.get_clock().now().to_msg()
+                t_obj.header.frame_id = 'base_link'
+                if marker_id == 3:
+                    t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
+                else :
+                    #pass
+                    t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 
-            pos = base_to_obj.transform.translation
-            quat = base_to_obj.transform.rotation
+                # copy translation and rotation from lookup
+                t_obj.transform.translation = base_to_obj.transform.translation
+                t_obj.transform.rotation = base_to_obj.transform.rotation
+                self.br.sendTransform(t_obj)
 
-            print(f"Marker: {marker_id}")
-            print(f'{{"pos": [{pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}], '
-                f'"quat": [{quat.x:.3f}, {quat.y:.3f}, {quat.z:.3f}, {quat.w:.3f}]}}')
+                pos = base_to_obj.transform.translation
+                quat = base_to_obj.transform.rotation
+
+                print(f"Marker: {marker_id}")
+                print(f'{{"pos": [{pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}], '
+                    f'"quat": [{quat.x:.3f}, {quat.y:.3f}, {quat.z:.3f}, {quat.w:.3f}]}}')
+            except:
+                print("Id not found")
 
         # cv2.imshow("Detected ArUco Markers", self.cv_image)
         # cv2.waitKey(1)

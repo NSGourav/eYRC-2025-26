@@ -31,7 +31,8 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS
-    src/bonus_task2_boiler_plate.py
+    src/task3b_perception.py
+    src/task3b_manipulation.py
     DESTINATION lib/${PROJECT_NAME}
 )
 ament_package()

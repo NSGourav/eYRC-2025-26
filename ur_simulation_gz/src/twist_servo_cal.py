@@ -214,8 +214,23 @@ class CartesianServoNode(Node):
         # print("Joint Names:", msg)
 
     def twist_callback(self, msg):
-        self.twist = np.array([msg.linear.x, msg.linear.y, msg.linear.z,
-                          msg.angular.x, msg.angular.y, msg.angular.z])
+        # self.twist = np.array([msg.linear.x, msg.linear.y, msg.linear.z,
+        #                   msg.angular.x, msg.angular.y, msg.angular.z])
+        
+        twist_ee = np.array([msg.linear.x, msg.linear.y, msg.linear.z,
+                         msg.angular.x, msg.angular.y, msg.angular.z])
+
+        if self.joint_positions is not None:
+            ee_matrix = self.get_link_pose('tool0')  # 4x4 matrix of EE in base_link
+            if ee_matrix is not None:
+                R = ee_matrix[:3, :3]  # rotation matrix of end-effector
+                lin_base = R @ twist_ee[:3]      # rotate linear velocity into base_link
+                ang_base = R @ twist_ee[3:]      # rotate angular velocity into base_link
+                self.twist = np.hstack((lin_base, ang_base))
+            else:
+                self.twist = twist_ee
+        else:
+            self.twist = twist_ee
         
     def halting(self):
         self.joint_velocities = np.zeros(len(self.joint_positions))

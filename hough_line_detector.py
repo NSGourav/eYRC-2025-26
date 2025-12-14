@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
@@ -8,6 +9,8 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import math
+import tf2_ros
+from tf2_ros import TransformException
 
 class HoughLineDetector(Node):
     def __init__(self):
@@ -15,7 +18,7 @@ class HoughLineDetector(Node):
 
         # Scan filtering
         self.min_range = 0.1
-        self.max_range = 1.0
+        self.max_range = 3.0  # Increased from 1.0m to detect shapes further away
         self.median_filter_size = 5
 
         # Hough parameters
@@ -50,8 +53,12 @@ class HoughLineDetector(Node):
         self.detection_paused = False
         self.pending_intermediate_goal = False
 
+        # TF2 for time-synchronized transforms
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         # ROS2 parameter for visualization
-        self.declare_parameter('enable_visualization', False)
+        self.declare_parameter('enable_visualization', True)
         self.enable_visualization = self.get_parameter('enable_visualization').value
 
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
@@ -97,6 +104,10 @@ class HoughLineDetector(Node):
             self.pending_intermediate_goal = False
             self.get_logger().info("⏸️  Detection PAUSED - Robot navigating to intermediate goal")
 
+        # Check if intermediate goal was completed - resume detection
+        elif msg.data.startswith("COMPLETED"):
+            self.detection_paused = False
+            self.get_logger().info("▶️  Detection RESUMED - Intermediate goal reached")
             # Publish shape status when goal is accepted
             if self.flag_print and self.shape_print is not None:
                 status_msg = String()
@@ -105,10 +116,6 @@ class HoughLineDetector(Node):
                 self.flag_print = False
                 self.get_logger().info(f"✓ Published shape status: {self.shape_print} at ({self.position_x:.2f}, {self.position_y:.2f})")
 
-        # Check if intermediate goal was completed - resume detection
-        elif msg.data.startswith("COMPLETED"):
-            self.detection_paused = False
-            self.get_logger().info("▶️  Detection RESUMED - Intermediate goal reached")
 
         # Handle errors - resume detection if goal failed
         elif msg.data.startswith("ERROR"):
@@ -123,11 +130,47 @@ class HoughLineDetector(Node):
             if self.detection_paused:
                 return
 
+            # Get robot pose at the exact scan timestamp using TF2
+            try:
+                # Lookup transform from ebot_base_link to odom at the scan timestamp
+                transform = self.tf_buffer.lookup_transform(
+                    'odom',                    # Target frame
+                    'ebot_base_link',          # Source frame (your robot's base frame)
+                    msg.header.stamp,          # At scan timestamp!
+                    timeout=Duration(seconds=0.5)
+                )
+
+                # Extract position
+                scan_position_x = transform.transform.translation.x
+                scan_position_y = transform.transform.translation.y
+
+                # Extract yaw from quaternion
+                quat = transform.transform.rotation
+                siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
+                cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
+                scan_yaw = math.atan2(siny_cosp, cosy_cosp)
+
+                # Log time difference for debugging
+                scan_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                current_time = self.get_clock().now().nanoseconds * 1e-9
+                time_diff = (current_time - scan_time) * 1000  # Convert to ms
+
+                if time_diff > 100:  # Warn if >100ms delay
+                    self.get_logger().warn(f"⏱️  Large time delay: {time_diff:.1f}ms")
+
+            except TransformException as ex:
+                self.get_logger().warn(f'⚠️  Could not get transform at scan time: {ex}')
+                # Fallback to current odometry (less accurate but better than failing)
+                scan_position_x = self.position_x
+                scan_position_y = self.position_y
+                scan_yaw = self.yaw
+                self.get_logger().info('   Using fallback odometry instead')
+
             all_points = self.scan_to_points(msg)
             if len(all_points) < 20:
                 return
 
-            filtered_points = self.filter_by_distance(all_points, 2.0)
+            filtered_points = self.filter_by_distance(all_points, 3.0)  # Match max_range
             if len(filtered_points) < 10:
                 return
 
@@ -136,7 +179,7 @@ class HoughLineDetector(Node):
             if len(raw_lines) == 0:
                 return
 
-            line_groups = self.group_by_proximity(raw_lines, 0.3)
+            line_groups = self.group_by_proximity(raw_lines, 0.15)  # Reduced from 0.3 to avoid merging separate shapes
 
             best_group = None
             best_score = -1
@@ -152,18 +195,33 @@ class HoughLineDetector(Node):
                 return
 
             shape_position = np.mean([[l['start'], l['end']] for l in best_group], axis=(0,1))
-            shape_distance = np.linalg.norm(shape_position)
+            
             shape_type = self.detect_shape(best_group)
 
             if shape_type == 'Triangle':
                 shape_position = best_group[1]['end']
             elif shape_type =='Square':
-                shape_position = self.compute_corner(best_group[1], best_group[2])
+                shape_position = best_group[2]['end'] #self.compute_corner(best_group[1], best_group[2])
+
+            # Apply 15cm offset in x-direction only (stop 15cm before the shape)
+            # if shape_type in ['Triangle', 'Square']:
+            #     original_x = shape_position[0]
+            #     # Subtract 15cm from x-coordinate (move back in robot's forward direction)
+            #     shape_position = np.array([shape_position[0] + 0.15, shape_position[1]+0.1])
+            #     self.get_logger().info(f'Applied 15cm x-offset: x={original_x:.2f} → x={shape_position[0]:.2f}, y={shape_position[1]:.2f} (unchanged)')
+
+            shape_distance = np.linalg.norm(shape_position)
 
             # Shape status will be published when intermediate goal is accepted (in goal_response_callback)
 
             if shape_type and shape_type in ['Pentagon', 'Square', 'Triangle']:
-                is_new, self.world_pos = self.is_new_detection(shape_position)
+                # Use scan-time pose for accurate world transformation
+                is_new, self.world_pos = self.is_new_detection(
+                    shape_position,
+                    robot_x=scan_position_x,
+                    robot_y=scan_position_y,
+                    robot_yaw=scan_yaw
+                )
                 if is_new:
                     self.shape_print=self.shape_status_map.get(shape_type)
                     self.flag_print=True
@@ -185,7 +243,7 @@ class HoughLineDetector(Node):
                 else:
                     shape_type = f'{shape_type} (Already Detected)'
 
-            self.visualize(filtered_points, binary_image, best_group, shape_type)
+            self.visualize(filtered_points, binary_image, best_group, shape_type, shape_position)
 
         except Exception as e:
             self.get_logger().error(f"❌ Error in scan_callback: {str(e)}")
@@ -224,15 +282,30 @@ class HoughLineDetector(Node):
                 print(angles)
                 return 'Triangle'
 
-    def local_to_world(self, local_pos):
-        """Convert local robot frame coordinates to world coordinates"""
+    def local_to_world(self, local_pos, robot_x=None, robot_y=None, robot_yaw=None):
+        """Convert local robot frame coordinates to world coordinates
+
+        Args:
+            local_pos: Position in robot's local frame [x, y]
+            robot_x: Robot's x position in world frame (defaults to self.position_x)
+            robot_y: Robot's y position in world frame (defaults to self.position_y)
+            robot_yaw: Robot's yaw in world frame (defaults to self.yaw)
+        """
+        # Use provided pose or fallback to current odometry
+        if robot_x is None:
+            robot_x = self.position_x
+        if robot_y is None:
+            robot_y = self.position_y
+        if robot_yaw is None:
+            robot_yaw = self.yaw
+
         # Rotation matrix
-        cos_yaw = math.cos(self.yaw)
-        sin_yaw = math.sin(self.yaw)
+        cos_yaw = math.cos(robot_yaw)
+        sin_yaw = math.sin(robot_yaw)
 
         # Transform: world = robot_world_pos + rotation * local
-        world_x = self.position_x + (local_pos[0] * cos_yaw - local_pos[1] * sin_yaw)
-        world_y = self.position_y + (local_pos[0] * sin_yaw + local_pos[1] * cos_yaw)
+        world_x = robot_x + (local_pos[0] * cos_yaw - local_pos[1] * sin_yaw)
+        world_y = robot_y + (local_pos[0] * sin_yaw + local_pos[1] * cos_yaw)
 
         return np.array([world_x, world_y])
 
@@ -290,10 +363,18 @@ class HoughLineDetector(Node):
         return corner
 
 
-    def is_new_detection(self, local_position):
-        """Check if shape at local position is new based on world coordinates"""
-        # Convert local position to world coordinates
-        world_position = self.local_to_world(local_position)
+    def is_new_detection(self, local_position, robot_x=None, robot_y=None, robot_yaw=None):
+        """Check if shape at local position is new based on world coordinates
+
+        Args:
+            local_position: Position in robot's local frame
+            robot_x: Robot's x position in world frame (defaults to self.position_x)
+            robot_y: Robot's y position in world frame (defaults to self.position_y)
+            robot_yaw: Robot's yaw in world frame (defaults to self.yaw)
+        """
+        # Convert local position to world coordinates using scan-time pose
+        world_position = self.local_to_world(local_position, robot_x, robot_y, robot_yaw)
+        # world_position = world_pos[0]+0.15, world_pos[1]+0.0  # Ensure copy
 
         for detected in self.detected_shapes:
             # Compare world coordinates
@@ -599,7 +680,7 @@ class HoughLineDetector(Node):
 
         return ordered
 
-    def visualize(self, points, binary_image, lines, shape_type='Unknown'):
+    def visualize(self, points, binary_image, lines, shape_type='Unknown', shape_position=None):
         # Skip visualization if disabled
         if not self.enable_visualization or self.fig is None:
             return
@@ -620,6 +701,14 @@ class HoughLineDetector(Node):
                          [line['start'][1], line['end'][1]],
                          color=color, linewidth=4, alpha=0.9,
                          label=f'L{i+1}: {line["length"]:.2f}m')
+
+        # Plot the calculated shape position in local coordinates
+        if shape_position is not None:
+            self.ax2.scatter(shape_position[0], shape_position[1],
+                           c='red', s=200, marker='X',
+                           edgecolors='black', linewidths=2,
+                           label=f'Shape Center ({shape_position[0]:.2f}, {shape_position[1]:.2f})',
+                           zorder=10)
 
         self.ax2.set_xlim(-0.5, 2.5)
         self.ax2.set_ylim(-1.5, 1.5)

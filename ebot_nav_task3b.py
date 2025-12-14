@@ -6,29 +6,51 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
-from geometry_msgs.msg import Twist
+from std_msgs.msg import String, ColorRGBA
+from geometry_msgs.msg import Twist, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import euler_from_quaternion
 
 # DWA PARAMS --> sampling + forward rollout + scoring loop
-ALPHA = 1.0                 # for more heading towards goal
-BETA = 0.9                  # for more clearance
-GAMMA = 1.5                 # for faster speeds
-DELTA = 0.9       # for reducing distance to current waypoint
+ALPHA = 1.8                 # for more heading towards goal (increased)
+BETA = 1.2                  # for clearance (increased to avoid tight spaces)
+GAMMA = 1.8                 # for faster speeds (increased)
+DELTA = 2.5                 # for reducing distance to current waypoint (significantly increased)
+EPSILON = 0.4               # for penalizing rotation (reduced from 0.8 to allow more rotation)
+ZETA = 0.3                  # for smoothness (prefer velocities close to current)
 
-DEL_T = 2.0
+DEL_T = 1.75                # Reduced from 2.0 for faster computation
 DT = 0.05
-V_SAMPLES = 9
-W_SAMPLES = 16
+V_SAMPLES = 7               # Reduced from 9 for speed
+W_SAMPLES = 13              # Reduced from 16 for speed
+COLLISION_CHECK_INTERVAL = 2  # Check collision every N steps for speed
+EARLY_TERMINATION_SCORE = 5.8  # If we find trajectory with score > this, accept it (updated for new terms)
 
 class ebotNav3B(Node):
     def __init__(self):
         super().__init__('ebot_nav')
 
+        # Declare ROS2 parameters
+        self.declare_parameter('enable_visualization', True)  # Can be set via launch file or CLI
+
         self.create_subscription(Odometry,"/odom",self.odom_callback,10)
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
         self.cmd_pub=self.create_publisher(Twist,"/cmd_vel",10)
+
+        # Visualization publishers (only if enabled via parameter)
+        self.enable_viz = self.get_parameter('enable_visualization').value
+        self.get_logger().info(f"Parameter 'enable_visualization' = {self.enable_viz}")
+
+        if self.enable_viz:
+            self.traj_pub = self.create_publisher(MarkerArray, "/dwa_trajectories", 10)
+            self.best_traj_pub = self.create_publisher(Marker, "/dwa_best_trajectory", 10)
+            self.goal_pub = self.create_publisher(Marker, "/dwa_goal", 10)
+            self.waypoints_pub = self.create_publisher(MarkerArray, "/dwa_waypoints", 10)
+            self.get_logger().info("✓ Visualization ENABLED - RViz markers will be published")
+        else:
+            self.get_logger().info("✓ Visualization DISABLED - Saving compute resources")
+
         self.flag_stop=False
 
         # Robot initial state
@@ -48,9 +70,9 @@ class ebotNav3B(Node):
         self.obstacles = np.empty((0,2))
 
         kp, ki, kd = (0.8, 0.0, 0.03)       # Path PID values
-        self.lateral_pid = PID(kp, ki, kd, out_min=-1.5, out_max=2.0)
+        self.lateral_pid = PID(kp, ki, kd, out_min=-2.5, out_max=2.5)
         ykp, yki, ykd = (20, 0.0, 0.02)     # Yaw PID values
-        self.yaw_pid = PID(ykp, yki, ykd, out_min=-1.5, out_max=1.5)
+        self.yaw_pid = PID(ykp, yki, ykd, out_min=-2.5, out_max=2.5)  # Updated to match W_MAX
 
         self.target_cycle_count = 0
         self.control_dt = DT
@@ -59,14 +81,15 @@ class ebotNav3B(Node):
 
         self.bot_radius = 0.25; self.safety_margin = 0.15
         self.safety_distance = self.bot_radius + self.safety_margin
+        self.safety_distance_sq = self.safety_distance ** 2  # Squared for faster collision checks
 
         self.min_lidar_angle= -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
         self.max_lidar_angle= 70.0 * pi / 180.0  
 
         self.V_MIN, self.V_MAX = 0.0, 2.0
-        self.W_MIN, self.W_MAX = -1.5, 1.5
+        self.W_MIN, self.W_MAX = -2.5, 2.5        # Increased from ±1.5 to allow faster rotation
         self.A_MIN, self.A_MAX = -1.0, 1.0
-        self.AL_MIN, self.AL_MAX = -0.2, 0.2
+        self.AL_MIN, self.AL_MAX = -0.5, 0.5      # Increased from ±0.2 for quicker rotation changes
         
         self.max_clearance_norm = 3.0
         self.lookahead_index = 3
@@ -87,6 +110,10 @@ class ebotNav3B(Node):
         self.last_best_traj = None
         self.start_time = time.time()
         self.get_logger().info("ebot_nav_task2A node started")
+
+        # Publish waypoints visualization once (if enabled)
+        if self.enable_viz:
+            self.visualize_all_waypoints()
 
 
     def odom_callback(self,msg:Odometry):
@@ -180,6 +207,10 @@ class ebotNav3B(Node):
         if all_trajs: self.last_all_trajs = all_trajs
         if best_traj: self.last_best_traj = best_traj
 
+        # Visualize trajectories in RViz (if enabled)
+        if self.enable_viz:
+            self.visualize_trajectories(all_trajs, best_traj, x_goal, y_goal)
+
         if best_traj is None or len(best_traj) == 0:
             cmd = Twist(); cmd.linear.x = 0.0; cmd.angular.z = 0.4
             self.publish_smoothed(cmd)
@@ -204,12 +235,23 @@ class ebotNav3B(Node):
         cmd = Twist(); cmd.linear.x = float(v_cmd); cmd.angular.z = float(w_cmd)
         self.publish_smoothed(cmd)
 
-    # DWA with progress and minimal-speed 
+    # DWA with progress and minimal-speed
     def dwa_modified(self, x_goal, y_goal, dist_to_goal):
         """DWA - sequential evaluation"""
+        # Check if we're in a tight space by measuring clearance
+        min_obs_dist = float('inf')
+        if len(self.obstacles) > 0:
+            dists = np.sqrt(self.obstacles[:,0]**2 + self.obstacles[:,1]**2)
+            min_obs_dist = float(np.min(dists))
+
+        # Adaptive minimum velocity: slow down in tight spaces
         enforced_v_min = self.V_MIN
         if dist_to_goal > self.dist_tolerance:
-            enforced_v_min = max(enforced_v_min, self.min_traj_V)
+            # If very tight (obstacles < 0.8m), allow very slow movement
+            if min_obs_dist < 0.8:
+                enforced_v_min = max(enforced_v_min, 0.15)  # Reduce min speed in tight spaces
+            else:
+                enforced_v_min = max(enforced_v_min, self.min_traj_V)
 
         sampled_v_min = max((self.curr_vx + self.A_MIN * DEL_T), enforced_v_min)
         sampled_v_max = min((self.curr_vx + self.A_MAX * DEL_T), self.V_MAX)
@@ -223,6 +265,18 @@ class ebotNav3B(Node):
 
         v_samples = np.linspace(sampled_v_min, sampled_v_max, V_SAMPLES)
         w_samples = np.linspace(sampled_w_min, sampled_w_max, W_SAMPLES)
+
+        # Transform obstacles from robot frame to world frame ONCE
+        if len(self.obstacles) > 0:
+            obs_world_x = (self.current_x +
+                           self.obstacles[:,0] * cos(self.current_yaw) -
+                           self.obstacles[:,1] * sin(self.current_yaw))
+            obs_world_y = (self.current_y +
+                           self.obstacles[:,0] * sin(self.current_yaw) +
+                           self.obstacles[:,1] * cos(self.current_yaw))
+            obstacles_world = np.column_stack((obs_world_x, obs_world_y))
+        else:
+            obstacles_world = np.empty((0,2))
 
         all_trajs = []; best_traj = None
         best_score = -float('inf'); best_v = 0.0; best_w = 0.0
@@ -238,22 +292,21 @@ class ebotNav3B(Node):
                 collision = False
                 steps = int(DEL_T / DT)
                 # Simulate trajectory
-                for _ in range(steps):
+                for step_idx in range(steps):
                     xi += v0 * cos(theta) * DT
                     yi += v0 * sin(theta) * DT
                     theta = (theta + w0 * DT + pi) % (2 * pi) - pi
-                    # Collision check
-                    if len(self.obstacles) > 0:
-                        dx = xi - self.current_x
-                        dy = yi - self.current_y
-                        xr = cos(-self.current_yaw) * dx - sin(-self.current_yaw) * dy
-                        yr = sin(-self.current_yaw) * dx + cos(-self.current_yaw) * dy
-                        dists = np.sqrt((self.obstacles[:,0] - xr)**2 + (self.obstacles[:,1] - yr)**2)
-                        step_min = float(np.min(dists))
-                        min_clearance = min(min_clearance, step_min)
-                        if step_min < self.safety_distance:
+                    # Collision check in world frame (every N steps or last step for safety)
+                    if len(obstacles_world) > 0 and (step_idx % COLLISION_CHECK_INTERVAL == 0 or step_idx == steps - 1):
+                        # Use squared distances for faster collision check
+                        dists_sq = (obstacles_world[:,0] - xi)**2 + (obstacles_world[:,1] - yi)**2
+                        step_min_sq = float(np.min(dists_sq))
+                        if step_min_sq < self.safety_distance_sq:
                             collision = True
                             break
+                        # Only compute sqrt for clearance tracking
+                        step_min = np.sqrt(step_min_sq)
+                        min_clearance = min(min_clearance, step_min)
                     traj_points.append((xi, yi, theta))
                 # Skip if collision or no valid trajectory
                 if collision or len(traj_points) == 0:
@@ -276,8 +329,27 @@ class ebotNav3B(Node):
                 raw_progress = max(0.0, (current_dist - final_dist))
                 denom = max(1e-3, current_dist)
                 progress_norm = np.clip(raw_progress / denom, 0.0, 1.0)
-                # Combined score
-                score = ALPHA * heading_score_norm + BETA * clearance_norm + GAMMA * v_norm + DELTA * progress_norm
+
+                # Adaptive rotation penalty: penalize less when heading error is large
+                # If heading_score_norm is low (bad heading), allow more rotation
+                # If heading_score_norm is high (good heading), penalize rotation more
+                rotation_penalty_factor = 0.3 + 0.7 * heading_score_norm  # Range: 0.3 to 1.0
+                w_norm = 1.0 - abs(w0) / self.W_MAX  # 1.0 for w=0, 0.0 for w=W_MAX
+                w_norm = np.clip(w_norm, 0.0, 1.0)
+
+                # Smoothness: prefer trajectories close to current velocity (reduces oscillation)
+                v_diff = abs(v0 - self.curr_vx) / max(self.V_MAX, 1e-3)
+                w_diff = abs(w0 - self.curr_w) / max(self.W_MAX, 1e-3)
+                smoothness_norm = 1.0 - 0.5 * (v_diff + w_diff)
+                smoothness_norm = np.clip(smoothness_norm, 0.0, 1.0)
+
+                # Combined score with adaptive rotation penalty
+                score = (ALPHA * heading_score_norm +
+                        BETA * clearance_norm +
+                        GAMMA * v_norm +
+                        DELTA * progress_norm +
+                        EPSILON * rotation_penalty_factor * w_norm +  # Adaptive rotation penalty
+                        ZETA * smoothness_norm)
                 # Store trajectory
                 all_trajs.append(traj_points)
                 valid_count += 1
@@ -288,6 +360,12 @@ class ebotNav3B(Node):
                     best_w = w0
                     best_traj = traj_points
                     best_progress = progress_norm
+                    # Early termination if we found an excellent trajectory
+                    if best_score >= EARLY_TERMINATION_SCORE:
+                        break
+            # Early termination outer loop
+            if best_score >= EARLY_TERMINATION_SCORE:
+                break
         info = {'valid_count': valid_count, 'best_score': best_score, 'best_v': best_v, 'best_w': best_w, 'best_prog': best_progress}
         if best_traj is None:
             return 0.0, 0.0, all_trajs, None, info
@@ -319,12 +397,115 @@ class ebotNav3B(Node):
         stop_msg.angular.z = 0.0
         self.cmd_pub.publish(stop_msg)
             
-    @staticmethod   
+    def visualize_all_waypoints(self):
+        """Visualize all waypoints in RViz"""
+        marker_array = MarkerArray()
+        for idx, waypoint in enumerate(self.waypoints):
+            x, y, yaw = waypoint
+            # Waypoint sphere
+            marker = Marker()
+            marker.header.frame_id = "odom"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "waypoints"
+            marker.id = idx
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = x
+            marker.pose.position.y = y
+            marker.pose.position.z = 0.3
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.2
+            marker.scale.y = 0.2
+            marker.scale.z = 0.2
+            marker.color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.6)  # Orange
+            marker_array.markers.append(marker)
+
+            # Waypoint text label
+            text_marker = Marker()
+            text_marker.header.frame_id = "odom"
+            text_marker.header.stamp = self.get_clock().now().to_msg()
+            text_marker.ns = "waypoint_labels"
+            text_marker.id = idx + 100
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            text_marker.pose.position.x = x
+            text_marker.pose.position.y = y
+            text_marker.pose.position.z = 0.5
+            text_marker.scale.z = 0.15
+            text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            text_marker.text = f"WP{idx+1}"
+            marker_array.markers.append(text_marker)
+
+        self.waypoints_pub.publish(marker_array)
+
+    def visualize_trajectories(self, all_trajs, best_traj, x_goal, y_goal):
+        """Visualize all DWA trajectories and the best trajectory in RViz"""
+        # Visualize all candidate trajectories
+        marker_array = MarkerArray()
+        for idx, traj in enumerate(all_trajs):
+            if len(traj) == 0:
+                continue
+            marker = Marker()
+            marker.header.frame_id = "odom"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "dwa_trajectories"
+            marker.id = idx
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+            marker.scale.x = 0.01  # Line width
+            marker.color = ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.3)  # Light blue, semi-transparent
+            marker.pose.orientation.w = 1.0
+
+            for (x, y, _) in traj:
+                p = Point()
+                p.x = x; p.y = y; p.z = 0.05
+                marker.points.append(p)
+            marker_array.markers.append(marker)
+        self.traj_pub.publish(marker_array)
+
+        # Visualize best trajectory
+        if best_traj and len(best_traj) > 0:
+            best_marker = Marker()
+            best_marker.header.frame_id = "odom"
+            best_marker.header.stamp = self.get_clock().now().to_msg()
+            best_marker.ns = "best_trajectory"
+            best_marker.id = 0
+            best_marker.type = Marker.LINE_STRIP
+            best_marker.action = Marker.ADD
+            best_marker.scale.x = 0.05  # Thicker line
+            best_marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)  # Bright green
+            best_marker.pose.orientation.w = 1.0
+
+            for (x, y, _) in best_traj:
+                p = Point()
+                p.x = x; p.y = y; p.z = 0.1
+                best_marker.points.append(p)
+            self.best_traj_pub.publish(best_marker)
+
+        # Visualize goal marker
+        goal_marker = Marker()
+        goal_marker.header.frame_id = "odom"
+        goal_marker.header.stamp = self.get_clock().now().to_msg()
+        goal_marker.ns = "goal"
+        goal_marker.id = 0
+        goal_marker.type = Marker.SPHERE
+        goal_marker.action = Marker.ADD
+        goal_marker.pose.position.x = x_goal
+        goal_marker.pose.position.y = y_goal
+        goal_marker.pose.position.z = 0.2
+        goal_marker.pose.orientation.w = 1.0
+        goal_marker.scale.x = 0.3
+        goal_marker.scale.y = 0.3
+        goal_marker.scale.z = 0.3
+        goal_marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.8)  # Red sphere
+        self.goal_pub.publish(goal_marker)
+
+    @staticmethod
     def normalize_angle(angle):
         while angle > pi: angle -= 2.0*pi
         while angle < -pi: angle += 2.0*pi
         return angle
-    
+
 class PID:      # PID controller class
     def __init__(self, kp, ki, kd, out_min=None, out_max=None):
         self.kp = kp; self.ki = ki; self.kd = kd

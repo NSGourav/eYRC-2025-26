@@ -46,9 +46,19 @@ class HoughLineDetector(Node):
         self.flag_print=False
         self.shape_print=None
 
+        # Detection control - pause while navigating to intermediate goal
+        self.detection_paused = False
+        self.pending_intermediate_goal = False
+
+        # ROS2 parameter for visualization
+        self.declare_parameter('enable_visualization', False)
+        self.enable_visualization = self.get_parameter('enable_visualization').value
+
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
         self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
+        self.create_subscription(String, "/intermediate_goal_response", self.goal_response_callback, 10)
         self.shape_pub=self.create_publisher(String, '/detection_status', 10)
+        self.intermediate_goal_pub=self.create_publisher(String, '/set_intermediate_goal', 10)
 
         self.shape_status_map = {
             "Triangle": "FERTILIZER_REQUIRED",
@@ -56,9 +66,16 @@ class HoughLineDetector(Node):
             "Pentagon": "DOCK_STATION"
         }
 
-        plt.ion()
-        self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(18, 9))
-        self.get_logger().info('Hough Line Detector started')
+        # Initialize matplotlib only if visualization is enabled
+        if self.enable_visualization:
+            plt.ion()
+            self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(18, 9))
+            self.get_logger().info('Hough Line Detector started with visualization ENABLED')
+        else:
+            self.fig = None
+            self.ax1 = None
+            self.ax2 = None
+            self.get_logger().info('Hough Line Detector started with visualization DISABLED')
     
     def odom_callback(self, msg: Odometry):
         self.position_x=msg.pose.pose.position.x
@@ -70,68 +87,114 @@ class HoughLineDetector(Node):
         cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
         self.yaw = math.atan2(siny_cosp, cosy_cosp)
 
+    def goal_response_callback(self, msg: String):
+        """Handle responses from intermediate goal service"""
+        self.get_logger().info(f"Navigation response: {msg.data}")
+
+        # Check if intermediate goal was accepted
+        if msg.data.startswith("SUCCESS") and self.pending_intermediate_goal:
+            self.detection_paused = True
+            self.pending_intermediate_goal = False
+            self.get_logger().info("⏸️  Detection PAUSED - Robot navigating to intermediate goal")
+
+            # Publish shape status when goal is accepted
+            if self.flag_print and self.shape_print is not None:
+                status_msg = String()
+                status_msg.data = f"{self.shape_print},{self.position_x},{self.position_y}"
+                self.shape_pub.publish(status_msg)
+                self.flag_print = False
+                self.get_logger().info(f"✓ Published shape status: {self.shape_print} at ({self.position_x:.2f}, {self.position_y:.2f})")
+
+        # Check if intermediate goal was completed - resume detection
+        elif msg.data.startswith("COMPLETED"):
+            self.detection_paused = False
+            self.get_logger().info("▶️  Detection RESUMED - Intermediate goal reached")
+
+        # Handle errors - resume detection if goal failed
+        elif msg.data.startswith("ERROR"):
+            self.detection_paused = False
+            self.pending_intermediate_goal = False
+            self.flag_print = False  # Clear flag on error
+            self.get_logger().warn(f"⚠️  Goal failed - Detection RESUMED: {msg.data}")
+
     def scan_callback(self, msg):
-        all_points = self.scan_to_points(msg)
-        if len(all_points) < 20:
-            return
+        try:
+            # Skip detection if paused (navigating to intermediate goal)
+            if self.detection_paused:
+                return
 
-        filtered_points = self.filter_by_distance(all_points, 2.0)
-        if len(filtered_points) < 10:
-            return
+            all_points = self.scan_to_points(msg)
+            if len(all_points) < 20:
+                return
 
-        binary_image = self.points_to_image(filtered_points)
-        raw_lines = self.detect_lines(binary_image)
-        if len(raw_lines) == 0:
-            return
+            filtered_points = self.filter_by_distance(all_points, 2.0)
+            if len(filtered_points) < 10:
+                return
 
-        line_groups = self.group_by_proximity(raw_lines, 0.3)
+            binary_image = self.points_to_image(filtered_points)
+            raw_lines = self.detect_lines(binary_image)
+            if len(raw_lines) == 0:
+                return
 
-        best_group = None
-        best_score = -1
+            line_groups = self.group_by_proximity(raw_lines, 0.3)
 
-        for group in line_groups:
-            processed = self.process_lines(group)
-            score = self.score_group(processed)
-            if score > best_score:
-                best_score = score
-                best_group = processed
+            best_group = None
+            best_score = -1
 
-        if not best_group:
-            return
+            for group in line_groups:
+                processed = self.process_lines(group)
+                score = self.score_group(processed)
+                if score > best_score:
+                    best_score = score
+                    best_group = processed
 
-        shape_position = np.mean([[l['start'], l['end']] for l in best_group], axis=(0,1))
-        shape_distance = np.linalg.norm(shape_position)
-        shape_type = self.detect_shape(best_group)
-        if self.flag_print==True:
+            if not best_group:
+                return
 
-                # if  math.sqrt((self.world_pos[0]-self.position_x)**2 +(self.world_pos[1]-self.position_y)**2) < 10.6:
-                if abs(self.world_pos[1]-self.position_y)<0.02:
-                    status_msg = String()
-                    status_msg.data = f"{self.shape_print},{self.position_x},{self.position_y}"
-                    self.shape_pub.publish(status_msg)
-                    self.flag_print=False
-        if shape_type and shape_type in ['Pentagon', 'Square', 'Triangle']:
-            is_new, self.world_pos = self.is_new_detection(shape_position)
-            if is_new:
-                self.shape_print=self.shape_status_map.get(shape_type)
-                self.flag_print=True
-                self.detected_shapes.append({
-                    'local_position': shape_position,
-                    'world_position': self.world_pos,
-                    'type': shape_type,
-                    'distance': shape_distance
-                })
-                self.get_logger().info(f'NEW: {shape_type} at local({shape_position[0]:.2f}, {shape_position[1]:.2f}), world({self.world_pos[0]:.2f}, {self.world_pos[1]:.2f})')
-                self.get_logger().info(f'Total: {len(self.detected_shapes)}')
+            shape_position = np.mean([[l['start'], l['end']] for l in best_group], axis=(0,1))
+            shape_distance = np.linalg.norm(shape_position)
+            shape_type = self.detect_shape(best_group)
 
-            else:
-                shape_type = f'{shape_type} (Already Detected)'
+            if shape_type == 'Triangle':
+                shape_position = best_group[1]['end']
+            elif shape_type =='Square':
+                shape_position = self.compute_corner(best_group[1], best_group[2])
 
-        self.visualize(filtered_points, binary_image, best_group, shape_type)
+            # Shape status will be published when intermediate goal is accepted (in goal_response_callback)
+
+            if shape_type and shape_type in ['Pentagon', 'Square', 'Triangle']:
+                is_new, self.world_pos = self.is_new_detection(shape_position)
+                if is_new:
+                    self.shape_print=self.shape_status_map.get(shape_type)
+                    self.flag_print=True
+                    self.detected_shapes.append({
+                        'local_position': shape_position,
+                        'world_position': self.world_pos,
+                        'type': shape_type,
+                        'distance': shape_distance
+                    })
+                    self.get_logger().info(f'NEW: {shape_type} at local({shape_position[0]:.2f}, {shape_position[1]:.2f}), world({self.world_pos[0]:.2f}, {self.world_pos[1]:.2f})')
+                    self.get_logger().info(f'Total: {len(self.detected_shapes)}')
+
+                    # Send intermediate goal ONLY for Square and Triangle (not Pentagon/dock)
+                    if shape_type in ['Square', 'Triangle']:
+                        self.send_intermediate_goal(self.world_pos, shape_type)
+                    else:
+                        self.get_logger().info(f"   {shape_type} detected but not sending intermediate goal (dock station)")
+
+                else:
+                    shape_type = f'{shape_type} (Already Detected)'
+
+            self.visualize(filtered_points, binary_image, best_group, shape_type)
+
+        except Exception as e:
+            self.get_logger().error(f"❌ Error in scan_callback: {str(e)}")
+            import traceback
+            self.get_logger().error(traceback.format_exc())
 
     def detect_shape(self, lines):
 
-        if len(lines) == 2 and lines[1]['length']<0.25:
+        if len(lines) == 2 and lines[1]['length']<0.25: # IMP
             angle = self.calc_angle(lines[0], lines[1])
             angle = 180 - angle
             dist = math.sqrt((lines[0]['end'][0]-lines[1]['start'][0])**2 +
@@ -149,7 +212,7 @@ class HoughLineDetector(Node):
             elif all(abs(a-90)<5 for a in angles):
                 return 'Square'
 
-        if len(lines) == 4:
+        if len(lines) == 4: # IMP
             angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(len(lines)-1)]
             for i in range(len(lines)-1):
                 dist= math.sqrt((lines[i]['end'][0]-lines[i+1]['start'][0])**2 +
@@ -172,6 +235,60 @@ class HoughLineDetector(Node):
         world_y = self.position_y + (local_pos[0] * sin_yaw + local_pos[1] * cos_yaw)
 
         return np.array([world_x, world_y])
+
+    def send_intermediate_goal(self, world_position, shape_type):
+        """Send intermediate goal to navigation node to investigate detected shape"""
+        try:
+            # Validate inputs
+            if world_position is None or len(world_position) < 2:
+                self.get_logger().error("❌ Invalid world position - cannot send goal")
+                return
+
+            # Send exact world position of the shape
+            goal_x = float(world_position[0])
+            goal_y = float(world_position[1])
+
+            # Validate calculated position
+            if not math.isfinite(goal_x) or not math.isfinite(goal_y):
+                self.get_logger().error("❌ Goal position is invalid (inf/nan)")
+                return
+
+            # Publish intermediate goal (only x,y - no yaw)
+            goal_msg = String()
+            goal_msg.data = f"{goal_x:.3f},{goal_y:.3f}"
+            self.intermediate_goal_pub.publish(goal_msg)
+
+            # Mark that we're waiting for goal acceptance
+            self.pending_intermediate_goal = True
+
+            self.get_logger().info(f"📍 Sending robot to investigate {shape_type}")
+            self.get_logger().info(f"   Goal: ({goal_x:.2f}, {goal_y:.2f})")
+            self.get_logger().info(f"   Waiting for navigation response...")
+
+        except Exception as e:
+            self.get_logger().error(f"❌ Failed to send intermediate goal: {str(e)}")
+            self.pending_intermediate_goal = False
+            self.flag_print = False
+
+    def compute_corner(self, line1, line2):
+        """
+        Compute intersection point (corner) of two connected lines
+        """
+        endpoints1 = [line1['start'], line1['end']]
+        endpoints2 = [line2['start'], line2['end']]
+
+        min_dist = float('inf')
+        corner = None
+
+        for p1 in endpoints1:
+            for p2 in endpoints2:
+                d = np.linalg.norm(p1 - p2)
+                if d < min_dist:
+                    min_dist = d
+                    corner = (p1 + p2) / 2
+
+        return corner
+
 
     def is_new_detection(self, local_position):
         """Check if shape at local position is new based on world coordinates"""
@@ -483,6 +600,10 @@ class HoughLineDetector(Node):
         return ordered
 
     def visualize(self, points, binary_image, lines, shape_type='Unknown'):
+        # Skip visualization if disabled
+        if not self.enable_visualization or self.fig is None:
+            return
+
         self.ax1.clear()
         self.ax2.clear()
 

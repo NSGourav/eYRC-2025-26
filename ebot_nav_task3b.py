@@ -36,10 +36,12 @@ class ebotNav3B(Node):
         self.create_subscription(Odometry,"/odom",self.odom_callback,10)
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
+        self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
         self.cmd_pub=self.create_publisher(Twist,"/cmd_vel",10)
+        self.goal_response_pub=self.create_publisher(String,"/intermediate_goal_response",10)
 
         # Visualization publishers (only if enabled via parameter)
-        self.enable_viz = self.get_parameter('enable_visualization').value
+        self.enable_viz = True #self.get_parameter('enable_visualization').value
         self.get_logger().info(f"Parameter 'enable_visualization' = {self.enable_viz}")
 
         if self.enable_viz:
@@ -49,7 +51,7 @@ class ebotNav3B(Node):
             self.waypoints_pub = self.create_publisher(MarkerArray, "/dwa_waypoints", 10)
             self.get_logger().info("✓ Visualization ENABLED - RViz markers will be published")
         else:
-            self.get_logger().info("✓ Visualization DISABLED - Saving compute resources")
+            self.get_logger().info("✓ Visualization DISABLED")
 
         self.flag_stop=False
 
@@ -61,10 +63,19 @@ class ebotNav3B(Node):
 
         self.waypoints = [
             [0.26, -1.95, 1.57],            # P1: (x1, y1, yaw1)
-            [-1.48, -0.67, -1.57],          # P2: (x2, y2, yaw2)
+            [0.26, 1.1, 1.57],
+            [-1.53, 1.1, -1.57],
+            [-1.53, -5.52, -1.57],
+            [-3.56, -5.52, +1.57],
+            [-3.56, 1.1, +1.57],         # P2: (x2, y2, yaw2)
             [-1.53, -6.61, -1.57]           # P3: (x3, y3, yaw3)
         ]
         self.w_index=0
+
+        # Intermediate goal management
+        self.has_intermediate_goal = False
+        self.intermediate_goal = None
+        self.saved_w_index = None  # Save current waypoint index when intermediate goal is set
 
         self.curr_vx = 0.0; self.curr_w = 0.0
         self.obstacles = np.empty((0,2))
@@ -125,6 +136,48 @@ class ebotNav3B(Node):
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
 
+    def set_intermediate_goal_callback(self, msg: String):
+        """Service-like callback to set an intermediate goal (x,y format: 'x,y')"""
+        try:
+            # Parse the goal from string format "x,y"
+            parts = msg.data.split(',')
+            if len(parts) != 2:
+                response_msg = String()
+                response_msg.data = "ERROR: Invalid format. Use 'x,y'"
+                self.goal_response_pub.publish(response_msg)
+                self.get_logger().error("Invalid intermediate goal format. Expected 'x,y'")
+                return
+
+            x = float(parts[0].strip())
+            y = float(parts[1].strip())
+
+            # Calculate yaw to face the goal from current position
+            dx = x - self.current_x
+            dy = y - self.current_y
+            yaw = atan2(dy, dx)
+
+            # Save current navigation state
+            self.saved_w_index = self.w_index
+            self.intermediate_goal = [x, y, yaw]
+            self.has_intermediate_goal = True
+
+            # Reset cycle counter for smooth transition
+            self.target_cycle_count = 0
+
+            self.get_logger().info(f"✓ Intermediate goal set: ({x:.2f}, {y:.2f}) → yaw calculated: {yaw:.2f}")
+            self.get_logger().info(f"  Saved waypoint index: {self.saved_w_index}")
+
+            # Send success response
+            response_msg = String()
+            response_msg.data = f"SUCCESS: Intermediate goal set to ({x:.2f},{y:.2f}) with calculated yaw {yaw:.2f}"
+            self.goal_response_pub.publish(response_msg)
+
+        except ValueError as e:
+            response_msg = String()
+            response_msg.data = f"ERROR: Failed to parse goal - {str(e)}"
+            self.goal_response_pub.publish(response_msg)
+            self.get_logger().error(f"Failed to parse intermediate goal: {e}")
+
     def shape_callback(self,msg:String):
         self.detected_shape_status = msg.data
         if self.detected_shape_status.startswith("DOCK_STATION"):
@@ -156,7 +209,7 @@ class ebotNav3B(Node):
     def control_loop(self):
         if self.flag_stop:    return
 
-        if self.w_index >= len(self.waypoints):
+        if self.w_index >= len(self.waypoints) and not self.has_intermediate_goal:
             self.stop_robot()
             self.get_logger().info("All waypoints reached.")
             self.get_logger().info(f"Total navigation time: {(time.time() - self.start_time):.2f} seconds")
@@ -169,7 +222,12 @@ class ebotNav3B(Node):
             self.cmd_pub.publish(init_msg)  # rotate at start
             return
 
-        x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
+        # Determine target: intermediate goal or regular waypoint
+        if self.has_intermediate_goal:
+            x_goal, y_goal, yaw_goal = self.intermediate_goal
+        else:
+            x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
+
         dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
 
         # Yaw align region
@@ -191,8 +249,26 @@ class ebotNav3B(Node):
                 else:
                     self.target_cycle_count = 0
                 if self.target_cycle_count >= self.target_stable_cycle:
-                    self.get_logger().info(f"Reached waypoint {self.w_index+1} (stable).({self.current_x:.2f},{self.current_y:.2f},{self.current_yaw:.2f})")
-                    self.w_index += 1
+                    # Handle intermediate goal completion
+                    if self.has_intermediate_goal:
+                        self.get_logger().info(f"✓ Reached intermediate goal ({self.current_x:.2f},{self.current_y:.2f},{self.current_yaw:.2f})")
+                        self.get_logger().info(f"  Resuming navigation to waypoint {self.saved_w_index+1}")
+
+                        # Publish completion response
+                        response_msg = String()
+                        response_msg.data = f"COMPLETED: Intermediate goal reached. Resuming waypoint {self.saved_w_index+1}"
+                        self.goal_response_pub.publish(response_msg)
+
+                        # Clear intermediate goal and restore saved waypoint
+                        self.has_intermediate_goal = False
+                        self.intermediate_goal = None
+                        self.w_index = self.saved_w_index
+                        self.saved_w_index = None
+                    else:
+                        # Normal waypoint completion
+                        self.get_logger().info(f"Reached waypoint {self.w_index+1} (stable).({self.current_x:.2f},{self.current_y:.2f},{self.current_yaw:.2f})")
+                        self.w_index += 1
+
                     self.target_cycle_count = 0
                     self.lateral_pid.reset(); self.yaw_pid.reset()
                 else:
@@ -497,7 +573,11 @@ class ebotNav3B(Node):
         goal_marker.scale.x = 0.3
         goal_marker.scale.y = 0.3
         goal_marker.scale.z = 0.3
-        goal_marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.8)  # Red sphere
+        # Color changes based on goal type: Magenta for intermediate, Red for waypoint
+        if self.has_intermediate_goal:
+            goal_marker.color = ColorRGBA(r=1.0, g=0.0, b=1.0, a=0.8)  # Magenta for intermediate goal
+        else:
+            goal_marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.8)  # Red for waypoint goal
         self.goal_pub.publish(goal_marker)
 
     @staticmethod

@@ -17,7 +17,7 @@ import numpy as np
 from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import String
 from linkattacher_msgs.srv import AttachLink, DetachLink
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import tf_transformations
 from std_srvs.srv import Trigger
@@ -35,6 +35,7 @@ class MarkerFollower(Node):
         # Publisher: publish end-effector velocity commands
         self.cmd_pub = self.create_publisher(Twist, "/delta_twist_cmds", 10)
         self.callback_group = ReentrantCallbackGroup()
+        self.fruit_cb_group=MutuallyExclusiveCallbackGroup()
         
         # Subscriber: get current end-effector pose
         self.sub = self.create_subscription(PoseStamped, '/tcp_pose_raw', self.pose_callback, 10,callback_group=self.callback_group)
@@ -48,16 +49,16 @@ class MarkerFollower(Node):
         self.current_orientation = None 
         self.current_rotation_matrix = None
         self.detection_service = self.create_service(Trigger,'/pick_and_place', self.control_loop,callback_group=self.callback_group)
-
+        self.bad_fruit_pick=self.create_timer(0.5,self.bad_fruit_callback,callback_group=self.fruit_cb_group)
         self.team_id = "5076"
-
+        self.flag_fruit=0
 
         self.fertiliser_pose = None
         self.ebot_pose = None
         self.home_location=[]
 
         # Error positions
-        self.pos_tol = 0.005  # 2.5 cm position tolerance
+        self.pos_tol = 0.02  # 2.5 cm position tolerance
         self.ori_tol = 0.01  # ~10 degrees in radians
         
         # Control loop parameters
@@ -78,7 +79,7 @@ class MarkerFollower(Node):
         self.current_orientation = np.array([msg.pose.orientation.x,msg.pose.orientation.y,msg.pose.orientation.z,msg.pose.orientation.w])
 
 
-    def gripper_service(self, command: str):
+    def gripper_service(self, command: str,model_n: str):
         services = {
             'attach': (self.attach_client, AttachLink),
             'detach': (self.detach_client, DetachLink)
@@ -91,7 +92,7 @@ class MarkerFollower(Node):
         client, srv_type = services[command]
 
         request = srv_type.Request()
-        request.model1_name = 'fertiliser_can'
+        request.model1_name = model_n
         request.link1_name  = 'body'
         request.model2_name = 'ur5'
         request.link2_name  = 'wrist_3_link'
@@ -103,6 +104,96 @@ class MarkerFollower(Node):
         self.service_future = client.call_async(request)
         self.get_logger().info(f'→ {command} request sent')
     
+    def lookup_tf(self, frame_id, timeout_sec=2.0):
+        start = self.get_clock().now()
+        while (self.get_clock().now() - start).nanoseconds < timeout_sec * 1e9:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'base_link',
+                    frame_id,
+                    rclpy.time.Time()
+                )
+                self.get_logger().info(f'TF found for {frame_id}')
+                return [
+                    tf.transform.translation.x,
+                    tf.transform.translation.y,
+                    tf.transform.translation.z,
+                    tf.transform.rotation.x,
+                    tf.transform.rotation.y,
+                    tf.transform.rotation.z,
+                    tf.transform.rotation.w,
+                ]
+            except tf2_ros.TransformException:
+                self.get_logger().debug(f'Waiting for TF: {frame_id}')
+                self.rate.sleep()
+
+        self.get_logger().error(f'Timeout waiting for TF: {frame_id}')
+        return None
+    
+    def bad_fruit_callback(self):
+
+        if self.flag_fruit==1:
+            self.flag_fruit_loc=False
+
+            while not self.flag_fruit_loc:
+                self.rate.sleep()
+                try:
+                    self.bad_fruit_1  = self.lookup_tf('5076_bad_fruit_0')
+                    self.bad_fruit_1[0]=self.bad_fruit_1[0]+0.02
+
+                    self.bad_fruit_2  = self.lookup_tf('5076_bad_fruit_1')
+                    self.bad_fruit_2[0]=self.bad_fruit_2[0]+0.02
+
+                    self.bad_fruit_3  = self.lookup_tf('5076_bad_fruit_2')
+                    self.bad_fruit_3[0]=self.bad_fruit_3[0]+0.02
+
+
+
+                    self.flag_fruit_loc = True
+                    self.get_logger().info('TF lookup successful — poses stored')
+
+
+                except tf2_ros.LookupException:
+                    self.get_logger().debug('TF not available yet, retrying ...')
+
+                except tf2_ros.TransformException as ex:
+                    self.get_logger().warn(f'TF error: {ex}')
+
+
+            self.goal_pose_nav([0.1,0.4,0.4,0.7,-0.7,0.0,0.0])
+            self.bad_fruit_1[2]=self.bad_fruit_1[2]+0.1
+            self.goal_pose_nav(self.bad_fruit_1)
+            self.bad_fruit_1[2]=self.bad_fruit_1[2]-0.07
+            self.goal_pose_nav(self.bad_fruit_1)
+            self.gripper_service("attach","bad_fruit_00")
+            self.bad_fruit_1[2]=self.bad_fruit_1[2]+0.2
+            self.goal_pose_nav([-0.8,0.01,0.3,0.7,-0.7,0.0,0.0])
+            self.gripper_service("detach","bad_fruit_00")
+
+
+            self.goal_pose_nav([0.1,0.4,0.4,0.7,-0.7,0.0,0.0])
+            self.bad_fruit_2[2]=self.bad_fruit_2[2]+0.1
+            self.goal_pose_nav(self.bad_fruit_2)
+            self.bad_fruit_2[2]=self.bad_fruit_2[2]-0.07
+            self.goal_pose_nav(self.bad_fruit_2)
+            self.gripper_service("attach","bad_fruit_12")
+            self.bad_fruit_2[2]=self.bad_fruit_2[2]+0.2
+            self.goal_pose_nav([-0.8,0.01,0.3,0.7,-0.7,0.0,0.0])
+            self.gripper_service("detach","bad_fruit_12")
+
+            self.goal_pose_nav([0.1,0.4,0.4,0.7,-0.7,0.0,0.0])
+            self.bad_fruit_3[2]=self.bad_fruit_3[2]+0.1
+            self.goal_pose_nav(self.bad_fruit_3)
+            self.bad_fruit_3[2]=self.bad_fruit_3[2]-0.07
+            self.goal_pose_nav(self.bad_fruit_3)
+            self.gripper_service("attach","bad_fruit_01")
+            self.bad_fruit_3[2]=self.bad_fruit_3[2]+0.2
+            self.goal_pose_nav([-0.8,0.01,0.3,0.7,-0.7,0.0,0.0])
+            self.gripper_service("detach","bad_fruit_01")
+
+            self.flag_fruit=0
+         # self.goal_pose_nav(self.bad_fruit_1)
+
     def goal_pose_nav(self,target_var):
         pose_flag=0
         ori_flag=0
@@ -124,7 +215,7 @@ class MarkerFollower(Node):
                 e_p_ee = self.current_rotation_matrix.T @ e_p_base
                 v_ee = self.kp_position * e_p_ee
                 v_ee = np.clip(v_ee, -0.1, 0.1)
-                v_min = 0.01
+                v_min = 0.015
                 v_ee = np.where(
                     np.abs(v_ee) < v_min,
                     v_min * np.sign(v_ee),
@@ -185,40 +276,11 @@ class MarkerFollower(Node):
         while not self.flag_target_loc:
             self.rate.sleep()
             try:
-                fert_tf = self.tf_buffer.lookup_transform(
-                    'base_link',
-                    '5076_fertiliser_can',
-                    rclpy.time.Time()
-                )
-
-                ebot_tf = self.tf_buffer.lookup_transform(
-                    'base_link',
-                    '5076_ebot_6',
-                    rclpy.time.Time()
-                )
-                
-                self.fertiliser_pose = [
-                    fert_tf.transform.translation.x,
-                    fert_tf.transform.translation.y,
-                    fert_tf.transform.translation.z,
-                    fert_tf.transform.rotation.x,
-                    fert_tf.transform.rotation.y,
-                    fert_tf.transform.rotation.z,
-                    fert_tf.transform.rotation.w]
-
-
-                self.ebot_pose = [
-                    ebot_tf.transform.translation.x,
-                    ebot_tf.transform.translation.y,
-                    ebot_tf.transform.translation.z,
-                    ebot_tf.transform.rotation.x,
-                    ebot_tf.transform.rotation.y,
-                    ebot_tf.transform.rotation.z,
-                    ebot_tf.transform.rotation.w]
-
-                self.flag_target_loc = True
+                self.fertiliser_pose = self.lookup_tf('5076_fertiliser_can')
+                self.ebot_pose = self.lookup_tf('5076_ebot_6')
+                if self.fertiliser_pose and self.ebot_pose:
+                    self.flag_target_loc = True
                 self.get_logger().info('TF lookup successful — poses stored')
-
 
             except tf2_ros.LookupException:
                 self.get_logger().debug('TF not available yet, retrying ...')
@@ -228,16 +290,17 @@ class MarkerFollower(Node):
         
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
         self.goal_pose_nav(self.fertiliser_pose)
-        self.gripper_service("attach")
+        self.gripper_service("attach","fertiliser_can")
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
         self.goal_pose_nav(self.fertiliser_pose)
         self.ebot_pose[2]=self.ebot_pose[2]+0.3
         self.goal_pose_nav(self.ebot_pose)
-        self.gripper_service("detach")
+        self.gripper_service("detach","fertiliser_can")
 
         response.success = True
         response.message = "Pick and place done"
         print('response sent')
+        self.flag_fruit=1
         return response
     
 def main():

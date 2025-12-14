@@ -33,6 +33,8 @@ install(PROGRAMS
 install(PROGRAMS
     src/task3b_perception.py
     src/task3b_manipulation.py
+    src/Task2B_bad_fruit_perception.py
+
     DESTINATION lib/${PROJECT_NAME}
 )
 ament_package()

@@ -60,7 +60,7 @@ class ebotNav3B(Node):
         self.waiting_for_service = False
         self.service_future = None
         self.service_start_time = None
-        self.service_timeout = 130.0  # seconds
+        self.service_timeout = 40.0  # seconds
 
         # Robot initial state
         self.current_x = -1.5339
@@ -158,10 +158,19 @@ class ebotNav3B(Node):
             x = float(parts[0].strip())
             y = float(parts[1].strip())
 
-            # Calculate yaw to face the goal from current position
-            dx = x - self.current_x
-            dy = y - self.current_y
-            yaw = atan2(dy, dx)
+            # Calculate yaw as 1.57 or -1.57 based on which is closer to current yaw
+            yaw_option_1 = 1.57   # +pi/2
+            yaw_option_2 = -1.57  # -pi/2
+
+            # Calculate angular differences (normalized to [-pi, pi])
+            diff_1 = self.normalize_angle(yaw_option_1 - self.current_yaw)
+            diff_2 = self.normalize_angle(yaw_option_2 - self.current_yaw)
+
+            # Choose the yaw that requires less rotation
+            if abs(diff_1) < abs(diff_2):
+                yaw = yaw_option_1
+            else:
+                yaw = yaw_option_2
 
             # Save current navigation state
             self.saved_w_index = self.w_index
@@ -171,12 +180,12 @@ class ebotNav3B(Node):
             # Reset cycle counter for smooth transition
             self.target_cycle_count = 0
 
-            self.get_logger().info(f"✓ Intermediate goal set: ({x:.2f}, {y:.2f}) → yaw calculated: {yaw:.2f}")
+            self.get_logger().info(f"✓ Intermediate goal set: ({x:.2f}, {y:.2f}) → yaw: {yaw:.2f} (current: {self.current_yaw:.2f})")
             self.get_logger().info(f"  Saved waypoint index: {self.saved_w_index}")
 
             # Send success response
             response_msg = String()
-            response_msg.data = f"SUCCESS: Intermediate goal set to ({x:.2f},{y:.2f}) with calculated yaw {yaw:.2f}"
+            response_msg.data = f"SUCCESS: Intermediate goal set to ({x:.2f},{y:.2f}) with yaw {yaw:.2f}"
             self.goal_response_pub.publish(response_msg)
 
         except ValueError as e:
@@ -237,13 +246,17 @@ class ebotNav3B(Node):
         # Determine target: intermediate goal or regular waypoint
         if self.has_intermediate_goal:
             x_goal, y_goal, yaw_goal = self.intermediate_goal
+            # For intermediate goals, check only y-direction distance
+            y_distance = abs(self.current_y - y_goal)
+            goal_reached = y_distance < 0.05  # 50cm threshold in y direction only
         else:
             x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
-
-        dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
+            # For waypoints, use Euclidean distance
+            dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
+            goal_reached = dist_to_goal < self.target_thresh
 
         # Yaw align region
-        if dist_to_goal < self.target_thresh:
+        if goal_reached:
             yaw_error = self.normalize_angle(yaw_goal - self.current_yaw)
 
             if abs(yaw_error) > self.yaw_thresh:
@@ -291,6 +304,9 @@ class ebotNav3B(Node):
                     cmd = Twist(); cmd.linear.x = 0.0; cmd.angular.z = 0.0
                     self.publish_smoothed(cmd)
                 return
+
+        # Calculate Euclidean distance for DWA (always needed for path planning)
+        dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
 
         # Running modified DWA to get (v,w)
         v_dwa, w_dwa, all_trajs, best_traj, info = self.dwa_modified(x_goal, y_goal, dist_to_goal)

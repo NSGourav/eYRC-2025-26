@@ -203,13 +203,6 @@ class HoughLineDetector(Node):
             elif shape_type =='Square':
                 shape_position = best_group[2]['end'] #self.compute_corner(best_group[1], best_group[2])
 
-            # Apply 15cm offset in x-direction only (stop 15cm before the shape)
-            # if shape_type in ['Triangle', 'Square']:
-            #     original_x = shape_position[0]
-            #     # Subtract 15cm from x-coordinate (move back in robot's forward direction)
-            #     shape_position = np.array([shape_position[0] + 0.15, shape_position[1]+0.1])
-            #     self.get_logger().info(f'Applied 15cm x-offset: x={original_x:.2f} → x={shape_position[0]:.2f}, y={shape_position[1]:.2f} (unchanged)')
-
             shape_distance = np.linalg.norm(shape_position)
 
             # Shape status will be published when intermediate goal is accepted (in goal_response_callback)

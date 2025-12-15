@@ -39,6 +39,7 @@ class ebotNav3B(Node):
         self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
         self.pick_and_place_client = self.create_client(Trigger,"/pick_and_place")
         self.cmd_pub=self.create_publisher(Twist,"/cmd_vel",10)
+        self.shape_pub=self.create_publisher(String, '/detection_status', 10)
         self.goal_response_pub=self.create_publisher(String,"/intermediate_goal_response",10)
 
         # Visualization publishers (only if enabled via parameter)
@@ -60,7 +61,7 @@ class ebotNav3B(Node):
         self.waiting_for_service = False
         self.service_future = None
         self.service_start_time = None
-        self.service_timeout = 40.0  # seconds
+        self.service_timeout = 60.0  # seconds
 
         # Robot initial state
         self.current_x = -1.5339
@@ -69,7 +70,7 @@ class ebotNav3B(Node):
         self.detected_shape_status = None
 
         self.waypoints = [
-            [0.50, -1.95, 1.57],            # P1: (x1, y1, yaw1)
+            [0.53, -1.95, 1.57],            # P1: (x1, y1, yaw1)
             [0.26, 1.1, 1.57],
             [-1.53, 1.1, -1.57],
             [-1.53, -5.52, -1.57],
@@ -294,7 +295,13 @@ class ebotNav3B(Node):
                         self.get_logger().info(f"Reached waypoint {self.w_index+1} (stable).({self.current_x:.2f},{self.current_y:.2f},{self.current_yaw:.2f})")
 
                         # Call pick_and_place service after reaching waypoint
-                        self.call_pick_and_place_service()
+                        if self.w_index ==0:
+                            status_msg = String()
+                            status_msg.data = f"DOCK_STATION,{self.current_x},{self.current_y},0"
+                            time.sleep(0.1)
+                            self.shape_pub.publish(status_msg)
+                            self.call_pick_and_place_service()
+
 
                         self.w_index += 1
 

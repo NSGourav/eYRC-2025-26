@@ -102,7 +102,7 @@ class FruitsTF(Node):
         # Find boundaries of white regions in the mask
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        fruit_id = 0
+        fruit_id = 1
         for cnt in contours:
             # Calculate contour area to filter out noise
             area = cv2.contourArea(cnt)

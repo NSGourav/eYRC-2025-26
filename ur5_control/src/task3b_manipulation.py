@@ -76,9 +76,9 @@ class ArmController(Node):
         self.prev_error_orientation=[0.0,0.0,0.0]
 
         self.attach_names = [
-            'bad_fruit_00',
-            'bad_fruit_11',
-            'bad_fruit_12'
+            'bad_fruit',
+            'bad_fruit',
+            'bad_fruit'
         ]
 
 
@@ -191,7 +191,7 @@ class ArmController(Node):
 
             self.gripper_service("attach", self.attach_names[i])
 
-            fruit_pose[2] += 0.15
+            fruit_pose[2] += 0.10
             self.goal_pose_nav(fruit_pose)
             self.goal_pose_nav(drop_pose)
 
@@ -297,10 +297,11 @@ class ArmController(Node):
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
 
         self.goal_pose_nav(self.fertiliser_pose)
-        self.ebot_pose[2]=self.ebot_pose[2]+0.3
+        self.ebot_pose[2]=self.ebot_pose[2]+0.2
         self.goal_pose_nav(self.ebot_pose)
         self.gripper_service("detach","fertiliser_can")
-
+        self.ebot_pose[0]=self.ebot_pose[0]-0.3
+        self.goal_pose_nav(self.ebot_pose)
         response.success = True
         response.message = "Pick and place done"
         print('response sent')

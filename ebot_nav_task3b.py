@@ -56,6 +56,12 @@ class ebotNav3B(Node):
 
         self.flag_stop=False
 
+        # Service call state management
+        self.waiting_for_service = False
+        self.service_future = None
+        self.service_start_time = None
+        self.service_timeout = 130.0  # seconds
+
         # Robot initial state
         self.current_x = -1.5339
         self.current_y = -6.6156
@@ -63,7 +69,7 @@ class ebotNav3B(Node):
         self.detected_shape_status = None
 
         self.waypoints = [
-            [0.56, -1.95, 1.57],            # P1: (x1, y1, yaw1)
+            [0.50, -1.95, 1.57],            # P1: (x1, y1, yaw1)
             [0.26, 1.1, 1.57],
             [-1.53, 1.1, -1.57],
             [-1.53, -5.52, -1.57],
@@ -209,6 +215,11 @@ class ebotNav3B(Node):
 
     def control_loop(self):
         if self.flag_stop:    return
+
+        # Check if waiting for service response
+        if self.waiting_for_service:
+            self.check_service_response()
+            return
 
         if self.w_index >= len(self.waypoints) and not self.has_intermediate_goal:
             self.stop_robot()
@@ -463,7 +474,7 @@ class ebotNav3B(Node):
         # self.get_logger().info(f"Published cmd_vel: v={sm.linear.x:.2f}, w={sm.angular.z:.2f}")
 
     def call_pick_and_place_service(self):
-        """Call the /pick_and_place service and wait for response"""
+        """Call the /pick_and_place service and set up waiting state"""
         if not self.pick_and_place_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().warn('pick_and_place service not available, skipping...')
             return
@@ -471,28 +482,48 @@ class ebotNav3B(Node):
         request = Trigger.Request()
         self.get_logger().info('Calling /pick_and_place service...')
 
-        # Call service synchronously and wait for response
-        future = self.pick_and_place_client.call_async(request)
+        # Call service asynchronously
+        self.service_future = self.pick_and_place_client.call_async(request)
+        self.service_start_time = time.time()
+        self.waiting_for_service = True
 
-        # Manual spinning to wait for the future to complete
-        timeout = 130.0  # seconds
-        start_time = time.time()
+    def check_service_response(self):
+        """Check if service response is ready (called from control loop)"""
+        if self.service_future is None:
+            self.waiting_for_service = False
+            return
 
-        while not future.done():
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start_time > timeout:
-                self.get_logger().error(f'Service call timed out after {timeout} seconds')
-                return
+        # Check timeout (similar to C++ future.wait_for)
+        elapsed = time.time() - self.service_start_time
+        if elapsed > self.service_timeout:
+            self.get_logger().warn(
+                f'Timeout waiting for response from /pick_and_place after {int(elapsed)} seconds'
+            )
+            self.waiting_for_service = False
+            self.service_future = None
+            self.w_index += 1  # Continue to next waypoint
+            return
 
-        # Get the result
-        try:
-            response = future.result()
-            if response.success:
-                self.get_logger().info(f'pick_and_place service succeeded: {response.message}')
-            else:
-                self.get_logger().warn(f'pick_and_place service failed: {response.message}')
-        except Exception as e:
-            self.get_logger().error(f'Service call failed: {str(e)}')
+        # Check if future is done
+        if self.service_future.done():
+            # Get the response (similar to C++ future.get())
+            try:
+                response = self.service_future.result()
+                if not response.success:
+                    self.get_logger().error(
+                        f'pick_and_place service call responded with failure: {response.message}'
+                    )
+                else:
+                    self.get_logger().info(
+                        f'pick_and_place service completed successfully: {response.message}'
+                    )
+            except Exception as e:
+                self.get_logger().error(f'Service call failed with exception: {str(e)}')
+
+            # Reset state and move to next waypoint
+            self.waiting_for_service = False
+            self.service_future = None
+            self.w_index += 1
 
     def hold_position(self):
             hold_msg = Twist()

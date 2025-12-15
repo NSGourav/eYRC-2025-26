@@ -97,5 +97,5 @@ def generate_launch_description():
         bridge,
         armed0,
         spawn_ebot,
-        spawn_arm
+        # spawn_arm
     ])

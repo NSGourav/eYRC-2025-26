@@ -134,7 +134,6 @@ class ebotNav3B(Node):
         if self.enable_viz:
             self.visualize_all_waypoints()
 
-
     def odom_callback(self,msg:Odometry):
         self.current_x=msg.pose.pose.position.x
         self.current_y=msg.pose.pose.position.y
@@ -159,29 +158,30 @@ class ebotNav3B(Node):
             x = float(parts[0].strip())
             y = float(parts[1].strip())
 
-            # Calculate yaw as 1.57 or -1.57 based on which is closer to current yaw
-            yaw_option_1 = 1.57   # +pi/2
-            yaw_option_2 = -1.57  # -pi/2
-
-            # Calculate angular differences (normalized to [-pi, pi])
-            diff_1 = self.normalize_angle(yaw_option_1 - self.current_yaw)
-            diff_2 = self.normalize_angle(yaw_option_2 - self.current_yaw)
-
-            # Choose the yaw that requires less rotation
-            if abs(diff_1) < abs(diff_2):
-                yaw = yaw_option_1
-            else:
-                yaw = yaw_option_2
+            # Shape centroid in world frame
+            shape_centroid = np.array([x, y])
+            # Find intersection with best DWA trajectory
+            intersection_point = self.find_trajectory_intersection(shape_centroid)
+            if intersection_point is None:
+                self.get_logger().warn("No valid trajectory intersection found. Using shape centroid.")
+                intersection_point = shape_centroid
+            # Calculate yaw to face the goal from current position
+            dx = intersection_point[0] - self.current_x
+            dy = intersection_point[1] - self.current_y
+            yaw = atan2(dy, dx)
 
             # Save current navigation state
             self.saved_w_index = self.w_index
-            self.intermediate_goal = [x, y, yaw]
+            self.intermediate_goal = [intersection_point[0], intersection_point[1], yaw]
             self.has_intermediate_goal = True
 
             # Reset cycle counter for smooth transition
             self.target_cycle_count = 0
 
-            self.get_logger().info(f"✓ Intermediate goal set: ({x:.2f}, {y:.2f}) → yaw: {yaw:.2f} (current: {self.current_yaw:.2f})")
+            self.get_logger().info(f"✓ Intermediate goal SET")
+            self.get_logger().info(f"  Shape centroid: ({x:.2f}, {y:.2f})")
+            self.get_logger().info(f"  Trajectory intersection: ({intersection_point[0]:.2f}, {intersection_point[1]:.2f})")
+            self.get_logger().info(f"  Target yaw: {yaw:.2f}")
             self.get_logger().info(f"  Saved waypoint index: {self.saved_w_index}")
 
             # Send success response
@@ -194,6 +194,262 @@ class ebotNav3B(Node):
             response_msg.data = f"ERROR: Failed to parse goal - {str(e)}"
             self.goal_response_pub.publish(response_msg)
             self.get_logger().error(f"Failed to parse intermediate goal: {e}")
+    
+    def find_trajectory_intersection(self, shape_centroid):
+        """
+        Find perpendicular line through shape centroid and get its intersection with DWA trajectory.
+        The perpendicular line is perpendicular to the direction formed by obstacles on both sides.
+        Then we find where this line intersects the robot's planned DWA trajectory.
+        Args:
+            shape_centroid: Shape position [x, y] in world frame
+        Returns:
+            Intersection point [x, y] or None if no valid intersection
+        """
+        # Use the last best trajectory from DWA
+        if self.last_best_traj is None or len(self.last_best_traj) < 2:
+            self.get_logger().warn("No valid DWA trajectory available")
+            return None
+        # Calculate perpendicular direction through shape centroid
+        # The perpendicular line is perpendicular to robot's heading direction
+        perp_dir = self.calculate_perpendicular_direction(shape_centroid)
+        if perp_dir is None:
+            return None
+        # Find intersection of perpendicular line with trajectory
+        intersection = self.line_trajectory_intersection(shape_centroid, perp_dir, self.last_best_traj)
+        return intersection
+    
+    def calculate_perpendicular_direction(self, shape_centroid):
+        """
+        Calculate perpendicular direction (perpendicular to robot's forward direction).
+        This is perpendicular to both side obstacles around the shape.
+        
+        Returns:
+            Normalized perpendicular direction vector [dx, dy]
+        """
+        # Fallback to robot heading if insufficient obstacles
+        if len(self.obstacles) < 2:
+            self.get_logger().warn("Insufficient obstacles for perpendicular calculation. Using robot heading.")
+            robot_heading = self.current_yaw
+            perp_angle = robot_heading + (pi / 2.0)
+            perp_dir = np.array([cos(perp_angle), sin(perp_angle)])
+            return perp_dir / (np.linalg.norm(perp_dir) + 1e-6)
+        
+        # Transform obstacles to world frame for analysis
+        obs_world_x = (self.current_x +
+                    self.obstacles[:,0] * cos(self.current_yaw) -
+                    self.obstacles[:,1] * sin(self.current_yaw))
+        obs_world_y = (self.current_y +
+                    self.obstacles[:,0] * sin(self.current_yaw) +
+                    self.obstacles[:,1] * cos(self.current_yaw))
+        obstacles_world = np.column_stack((obs_world_x, obs_world_y))
+        
+        # Convert shape centroid to robot frame for easier clustering
+        shape_x = shape_centroid[0]
+        shape_y = shape_centroid[1]
+        
+        # Vector from robot to shape
+        dx_to_shape = shape_x - self.current_x
+        dy_to_shape = shape_y - self.current_y
+        dist_to_shape = hypot(dx_to_shape, dy_to_shape)
+        
+        if dist_to_shape < 1e-6:
+            self.get_logger().warn("Shape centroid too close to robot. Using robot heading.")
+            robot_heading = self.current_yaw
+            perp_angle = robot_heading + (pi / 2.0)
+            perp_dir = np.array([cos(perp_angle), sin(perp_angle)])
+            return perp_dir / (np.linalg.norm(perp_dir) + 1e-6)
+        
+        # Direction vector towards shape (normalized)
+        toward_shape = np.array([dx_to_shape / dist_to_shape, dy_to_shape / dist_to_shape])
+        
+        # Compute angles of obstacles relative to shape centroid (in world frame)
+        obs_angles = []
+        for obs in obstacles_world:
+            dx = obs[0] - shape_x
+            dy = obs[1] - shape_y
+            angle = atan2(dy, dx)
+            obs_angles.append((angle, obs))
+        
+        # Sort obstacles by angle around the shape
+        obs_angles.sort(key=lambda x: x[0])
+        
+        # Find largest angular gap (this separates left and right obstacle clusters)
+        max_gap = 0.0
+        gap_start_idx = 0
+        for i in range(len(obs_angles)):
+            angle1 = obs_angles[i][0]
+            angle2 = obs_angles[(i + 1) % len(obs_angles)][0]
+            gap = (angle2 - angle1) % (2 * pi)
+            if gap > max_gap:
+                max_gap = gap
+                gap_start_idx = i
+        
+        # Split obstacles into two clusters: left and right of the gap
+        left_cluster_idx = (gap_start_idx + 1) % len(obs_angles)
+        right_cluster_idx = gap_start_idx
+        
+        # Gather left and right clusters
+        left_indices = []
+        right_indices = []
+        
+        for i in range(len(obs_angles)):
+            if gap_start_idx == 0:
+                # Gap is at the beginning
+                if i < len(obs_angles) // 2:
+                    left_indices.append(i)
+                else:
+                    right_indices.append(i)
+            else:
+                # Gap is in the middle
+                if i > gap_start_idx:
+                    left_indices.append(i)
+                else:
+                    right_indices.append(i)
+        
+        # Compute average direction for each cluster
+        left_dir = np.array([0.0, 0.0])
+        right_dir = np.array([0.0, 0.0])
+        
+        if len(left_indices) > 0:
+            for idx in left_indices:
+                obs = obs_angles[idx][1]
+                obs_dir = np.array([obs[0] - shape_x, obs[1] - shape_y])
+                obs_dist = np.linalg.norm(obs_dir)
+                if obs_dist > 1e-6:
+                    left_dir += obs_dir / obs_dist
+            left_dir = left_dir / max(1, len(left_indices))
+            left_dir = left_dir / (np.linalg.norm(left_dir) + 1e-6)
+        
+        if len(right_indices) > 0:
+            for idx in right_indices:
+                obs = obs_angles[idx][1]
+                obs_dir = np.array([obs[0] - shape_x, obs[1] - shape_y])
+                obs_dist = np.linalg.norm(obs_dir)
+                if obs_dist > 1e-6:
+                    right_dir += obs_dir / obs_dist
+            right_dir = right_dir / max(1, len(right_indices))
+            right_dir = right_dir / (np.linalg.norm(right_dir) + 1e-6)
+        
+        # Compute perpendicular direction from the line connecting left and right obstacle clusters
+        # The perpendicular to the "obstacle line" points toward the trajectory
+        if len(left_indices) > 0 and len(right_indices) > 0:
+            # Direction between the two obstacle clusters
+            cluster_line = right_dir - left_dir
+            cluster_line_norm = np.linalg.norm(cluster_line)
+            
+            if cluster_line_norm > 1e-6:
+                cluster_line = cluster_line / cluster_line_norm
+                # Perpendicular to cluster line (90° rotation in 2D: (x,y) -> (-y,x))
+                perp_dir = np.array([-cluster_line[1], cluster_line[0]])
+                
+                # Ensure perpendicular points toward the robot's forward motion direction
+                # Dot product with robot's heading to get the correct sign
+                robot_heading_vec = np.array([cos(self.current_yaw), sin(self.current_yaw)])
+                if np.dot(perp_dir, robot_heading_vec) < 0:
+                    perp_dir = -perp_dir
+            else:
+                self.get_logger().warn("Obstacle clusters too close. Using robot heading.")
+                robot_heading = self.current_yaw
+                perp_angle = robot_heading + (pi / 2.0)
+                perp_dir = np.array([cos(perp_angle), sin(perp_angle)])
+        else:
+            self.get_logger().warn("Insufficient obstacle clusters. Using robot heading.")
+            robot_heading = self.current_yaw
+            perp_angle = robot_heading + (pi / 2.0)
+            perp_dir = np.array([cos(perp_angle), sin(perp_angle)])
+        
+        perp_dir = perp_dir / (np.linalg.norm(perp_dir) + 1e-6)
+        
+        self.get_logger().debug(f"Perpendicular direction: [{perp_dir[0]:.3f}, {perp_dir[1]:.3f}]")
+        
+        return perp_dir
+    
+    def line_trajectory_intersection(self, line_point, line_dir, trajectory):
+        """
+        Find intersection of a line (passing through line_point with direction line_dir)
+        with a trajectory polyline.
+        
+        The line equation: P = line_point + t * line_dir
+        We find where this intersects trajectory segments.
+        
+        Args:
+            line_point: Point on the perpendicular line [x, y]
+            line_dir: Direction of perpendicular line [dx, dy]
+            trajectory: List of trajectory points [(x, y, theta), ...]
+        
+        Returns:
+            Intersection point [x, y] closest to shape centroid, or None
+        """
+        
+        intersections = []
+        
+        # Check intersection with each trajectory segment
+        for i in range(len(trajectory) - 1):
+            traj_p1 = np.array(trajectory[i][:2])
+            traj_p2 = np.array(trajectory[i + 1][:2])
+            traj_dir = traj_p2 - traj_p1
+            
+            # Line-line intersection in 2D
+            # Line 1: P = line_point + s * line_dir
+            # Line 2: P = traj_p1 + t * traj_dir
+            # Solve: line_point + s * line_dir = traj_p1 + t * traj_dir
+            
+            intersection_pt = self.line_segment_intersection(
+                line_point, line_dir, traj_p1, traj_dir, is_segment=True
+            )
+            
+            if intersection_pt is not None:
+                intersections.append(intersection_pt)
+        
+        if len(intersections) == 0:
+            self.get_logger().warn("No trajectory intersection found")
+            return None
+        
+        # Return intersection closest to shape centroid (first valid intersection)
+        # Prefer intersections closer along the trajectory direction
+        best_intersection = intersections[0]
+        
+        self.get_logger().info(f"Found {len(intersections)} intersection(s) with trajectory")
+        
+        return best_intersection
+    
+    def line_segment_intersection(self, p1, d1, p2, d2, is_segment=True):
+        """
+        Find intersection of two lines/segments.
+        Line 1: P = p1 + s * d1
+        Line 2: P = p2 + t * d2
+        Args:
+            p1, d1: Point and direction of line 1
+            p2, d2: Point and direction of line 2
+            is_segment: If True, check if intersection is within segment bounds (t ∈ [0,1])
+        Returns:
+            Intersection point [x, y] or None
+        """
+        
+        # Solve: p1 + s * d1 = p2 + t * d2
+        # Rearrange: s * d1 - t * d2 = p2 - p1
+        
+        # Matrix form: [d1 | -d2] * [s; t] = (p2 - p1)
+        A = np.column_stack([d1, -d2])
+        b = p2 - p1
+        
+        # Check if lines are parallel
+        det = np.linalg.det(A)
+        if abs(det) < 1e-6:
+            return None
+        try:
+            params = np.linalg.solve(A, b)
+            s, t = params
+            
+            # If checking segment, ensure t is within [0, 1]
+            if is_segment and not (0.0 <= t <= 1.0):
+                return None
+            # Calculate intersection point using line 1
+            intersection = p1 + s * d1
+            return intersection
+            
+        except np.linalg.LinAlgError:
+            return None
 
     def shape_callback(self,msg:String):
         self.detected_shape_status = msg.data
@@ -249,7 +505,7 @@ class ebotNav3B(Node):
             x_goal, y_goal, yaw_goal = self.intermediate_goal
             # For intermediate goals, check only y-direction distance
             y_distance = abs(self.current_y - y_goal)
-            goal_reached = y_distance < 0.05  # 50cm threshold in y direction only
+            goal_reached = y_distance < 0.5  # 50cm threshold in y direction only
         else:
             x_goal, y_goal, yaw_goal = self.waypoints[self.w_index]
             # For waypoints, use Euclidean distance

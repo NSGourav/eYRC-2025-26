@@ -72,7 +72,7 @@ class HoughLineDetector(Node):
             "Square": "BAD_HEALTH",
             "Pentagon": "DOCK_STATION"
         }
-        self.plant_id=None  # 0 for Dock station, 1 to 8
+
         # Initialize matplotlib only if visualization is enabled
         if self.enable_visualization:
             plt.ion()
@@ -111,7 +111,7 @@ class HoughLineDetector(Node):
             # Publish shape status when goal is accepted
             if self.flag_print and self.shape_print is not None:
                 status_msg = String()
-                status_msg.data = f"{self.shape_print},{self.position_x:.2f},{self.position_y:.2f},{self.plant_id}"
+                status_msg.data = f"{self.shape_print},{self.position_x},{self.position_y}"
                 self.shape_pub.publish(status_msg)
                 self.flag_print = False
                 self.get_logger().info(f"✓ Published shape status: {self.shape_print} at ({self.position_x:.2f}, {self.position_y:.2f})")
@@ -226,14 +226,11 @@ class HoughLineDetector(Node):
                 if is_new:
                     self.shape_print=self.shape_status_map.get(shape_type)
                     self.flag_print=True
-                    # Assign plant_id based on lane and segment
-                    self.assign_plant_id(self.world_pos, scan_position_x, scan_position_y)
                     self.detected_shapes.append({
                         'local_position': shape_position,
                         'world_position': self.world_pos,
                         'type': shape_type,
-                        'distance': shape_distance,
-                        'plant_id': self.plant_id
+                        'distance': shape_distance
                     })
                     self.get_logger().info(f'NEW: {shape_type} at local({shape_position[0]:.2f}, {shape_position[1]:.2f}), world({self.world_pos[0]:.2f}, {self.world_pos[1]:.2f})')
                     self.get_logger().info(f'Total: {len(self.detected_shapes)}')
@@ -285,132 +282,7 @@ class HoughLineDetector(Node):
                 self.get_logger().info('Detected Triangle')
                 print(angles)
                 return 'Triangle'
-            
-    def assign_plant_id(self, shape_world_pos, robot_x, robot_y):
-        """
-        Assign plant_id (0-8) based on:
-        - Which lane the robot is in (1, 2, or 3)
-        - Which segment of the lane (1, 2, 3, or 4)
-        - Whether the shape is on the left or right side of the robot
-        Args:
-            shape_world_pos: World position of detected shape [x, y]
-            robot_x: Robot's current x position
-            robot_y: Robot's current y position
-        Returns:
-            plant_id (0-8): ID based on lane, segment, and side
-        """
-        # Define lane boundaries and segments
-        lanes = {
-            1: {
-                'x_range': (0.2, 0.35),
-                'right': {'id': 0},  # Dock station
-                'left': {
-                    'segments': [
-                        {'y_range': (-4.67, -3.374), 'id': 1},
-                        {'y_range': (-3.374, -2.020), 'id': 2},
-                        {'y_range': (-2.020, -0.720), 'id': 3},
-                        {'y_range': (-0.720, 0.552), 'id': 4},
-                    ]
-                }
-            },
-            2: {
-                'x_range': (-1.45, -1.3),
-                'right': {
-                    'segments': [
-                        {'y_range': (-4.757, -3.381), 'id': 1},
-                        {'y_range': (-3.381, -2.057), 'id': 2},
-                        {'y_range': (-2.057, -0.711), 'id': 3},
-                        {'y_range': (-0.711, 0.553), 'id': 4},
-                    ]
-                },
-                'left': {
-                    'segments': [
-                        {'y_range': (-4.757, -3.381), 'id': 5},
-                        {'y_range': (-3.381, -2.057), 'id': 6},
-                        {'y_range': (-2.057, -0.711), 'id': 7},
-                        {'y_range': (-0.711, 0.553), 'id': 8},
-                    ]
-                }
-            },
-            3: {
-                'x_range': (-3.5, -3.35),
-                'right': {
-                    'segments': [
-                        {'y_range': (-4.716, -3.456), 'id': 5},
-                        {'y_range': (-3.456, -2.079), 'id': 6},
-                        {'y_range': (-2.079, -0.723), 'id': 7},
-                        {'y_range': (-0.723, 0.527), 'id': 8},
-                    ]
-                }
-            }
-        }
-        # Determine which lane the robot is in based on x-coordinate
-        current_lane = None
-        for lane_num, lane_data in lanes.items():
-            x_min, x_max = lane_data['x_range']
-            if x_min <= robot_x <= x_max:
-                current_lane = lane_num
-                break
-        if current_lane is None:
-            self.get_logger().warn(f"Robot x-position {robot_x:.3f} not in any lane range")
-            return None
-        
-        # Determine side (left or right) based on shape position relative to robot
-        # Left side: shape_x < robot_x, Right side: shape_x > robot_x
-        is_left_side = shape_world_pos[0] < robot_x
-        lane_config = lanes[current_lane]
-        
-        # Special case: Lane 1 only has right (dock) and left segments
-        if current_lane == 1:
-            if not is_left_side:
-                self.plant_id = 0  # Dock station
-                self.get_logger().info(f"🌿 Plant ID assigned: {self.plant_id} (Dock - Lane 1, Right)")
-                return 0
-            else:
-                # Find segment for left side
-                for segment in lane_config['left']['segments']:
-                    y_min, y_max = segment['y_range']
-                    if y_min <= robot_y <= y_max:
-                        self.plant_id = segment['id']
-                        self.get_logger().info(
-                            f"🌿 Plant ID assigned: {self.plant_id} "
-                            f"(Lane {current_lane}, Left, Segment y:[{y_min}, {y_max}])"
-                        )
-                        return self.plant_id
-        # Lane 2 and 3: Check right or left segments
-        elif current_lane == 2:
-            side_key = 'right' if not is_left_side else 'left'
-            segments = lane_config[side_key]['segments']
-            
-            for segment in segments:
-                y_min, y_max = segment['y_range']
-                if y_min <= robot_y <= y_max:
-                    self.plant_id = segment['id']
-                    self.get_logger().info(
-                        f"🌿 Plant ID assigned: {self.plant_id} "
-                        f"(Lane {current_lane}, {side_key.capitalize()}, Segment y:[{y_min}, {y_max}])"
-                    )
-                    return self.plant_id
-        elif current_lane == 3:
-            # Lane 3 only has right segments in your data
-            if not is_left_side:
-                segments = lane_config['right']['segments']
-                for segment in segments:
-                    y_min, y_max = segment['y_range']
-                    if y_min <= robot_y <= y_max:
-                        self.plant_id = segment['id']
-                        self.get_logger().info(
-                            f"🌿 Plant ID assigned: {self.plant_id} "
-                            f"(Lane {current_lane}, Right, Segment y:[{y_min}, {y_max}])"
-                        )
-                        return self.plant_id
-        # If no segment matched
-        self.get_logger().warn(
-            f"⚠️  Could not assign plant_id - robot at ({robot_x:.3f}, {robot_y:.3f}) "
-            f"in Lane {current_lane} not in any segment"
-        )
-        return None
-    
+
     def local_to_world(self, local_pos, robot_x=None, robot_y=None, robot_yaw=None):
         """Convert local robot frame coordinates to world coordinates
 

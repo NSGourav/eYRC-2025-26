@@ -10,7 +10,7 @@ from std_msgs.msg import String, ColorRGBA
 from geometry_msgs.msg import Twist, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import euler_from_quaternion
-
+from std_srvs.srv import Trigger
 # DWA PARAMS --> sampling + forward rollout + scoring loop
 ALPHA = 1.8                 # for more heading towards goal (increased)
 BETA = 1.2                  # for clearance (increased to avoid tight spaces)
@@ -37,6 +37,7 @@ class ebotNav3B(Node):
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
         self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
+        self.create_client(Trigger,"/pick_and_place")
         self.cmd_pub=self.create_publisher(Twist,"/cmd_vel",10)
         self.goal_response_pub=self.create_publisher(String,"/intermediate_goal_response",10)
 

@@ -117,7 +117,7 @@ class CartesianServoNode(Node):
         #                          so here we set the timer to 0.0050 seconds 
         # so that collision check could occur at fast as possible
 
-        self.create_timer(0.005, self.calculate_twist)
+        self.create_timer(0.1, self.calculate_twist) #0.005
         self.joint_velocities = np.zeros(6)  # Initialize joint velocities to zero
         # Initialize boundary planes AFTER boundary_plane_data is initialized
         self.boundary_planes = self.create_boundary_planes()

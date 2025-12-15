@@ -37,7 +37,7 @@ class ebotNav3B(Node):
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
         self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
-        self.create_client(Trigger,"/pick_and_place")
+        self.pick_and_place_client = self.create_client(Trigger,"/pick_and_place")
         self.cmd_pub=self.create_publisher(Twist,"/cmd_vel",10)
         self.goal_response_pub=self.create_publisher(String,"/intermediate_goal_response",10)
 
@@ -63,7 +63,7 @@ class ebotNav3B(Node):
         self.detected_shape_status = None
 
         self.waypoints = [
-            [0.26, -1.95, 1.57],            # P1: (x1, y1, yaw1)
+            [0.56, -1.95, 1.57],            # P1: (x1, y1, yaw1)
             [0.26, 1.1, 1.57],
             [-1.53, 1.1, -1.57],
             [-1.53, -5.52, -1.57],
@@ -268,6 +268,10 @@ class ebotNav3B(Node):
                     else:
                         # Normal waypoint completion
                         self.get_logger().info(f"Reached waypoint {self.w_index+1} (stable).({self.current_x:.2f},{self.current_y:.2f},{self.current_yaw:.2f})")
+
+                        # Call pick_and_place service after reaching waypoint
+                        self.call_pick_and_place_service()
+
                         self.w_index += 1
 
                     self.target_cycle_count = 0
@@ -457,6 +461,38 @@ class ebotNav3B(Node):
         self.cmd_pub.publish(sm)
         self.prev_cmd = sm
         # self.get_logger().info(f"Published cmd_vel: v={sm.linear.x:.2f}, w={sm.angular.z:.2f}")
+
+    def call_pick_and_place_service(self):
+        """Call the /pick_and_place service and wait for response"""
+        if not self.pick_and_place_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn('pick_and_place service not available, skipping...')
+            return
+
+        request = Trigger.Request()
+        self.get_logger().info('Calling /pick_and_place service...')
+
+        # Call service synchronously and wait for response
+        future = self.pick_and_place_client.call_async(request)
+
+        # Manual spinning to wait for the future to complete
+        timeout = 130.0  # seconds
+        start_time = time.time()
+
+        while not future.done():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if time.time() - start_time > timeout:
+                self.get_logger().error(f'Service call timed out after {timeout} seconds')
+                return
+
+        # Get the result
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'pick_and_place service succeeded: {response.message}')
+            else:
+                self.get_logger().warn(f'pick_and_place service failed: {response.message}')
+        except Exception as e:
+            self.get_logger().error(f'Service call failed: {str(e)}')
 
     def hold_position(self):
             hold_msg = Twist()

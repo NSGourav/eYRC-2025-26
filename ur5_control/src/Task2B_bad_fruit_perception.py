@@ -184,7 +184,7 @@ class FruitsTF(Node):
             t_cam = TransformStamped()
             t_cam.header.stamp = self.get_clock().now().to_msg()
             t_cam.header.frame_id = 'camera_link'
-            t_cam.child_frame_id = f'cam_{fruit_id}'
+            t_cam.child_frame_id = f'cam_fruit_{fruit_id}'
             t_cam.transform.translation.x = z
             t_cam.transform.translation.y = x
             t_cam.transform.translation.z = y

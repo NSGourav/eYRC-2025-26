@@ -232,7 +232,7 @@ class aruco_tf(Node):
                 t_obj.header.stamp = self.get_clock().now().to_msg()
                 t_obj.header.frame_id = 'base_link'
                 if marker_id == 3:
-                    t_obj.child_frame_id = f'{self.team_id}_fertiliser_can'
+                    t_obj.child_frame_id = f'{self.team_id}_fertilizer_1'
                 else :
                     t_obj.child_frame_id = f'{self.team_id}_ebot_{marker_id}'
 

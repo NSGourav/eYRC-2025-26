@@ -148,9 +148,9 @@ class ArmController(Node):
         self.flag_fruit_loc = False
 
         fruit_frames = [
-            '5076_bad_fruit_0',
             '5076_bad_fruit_1',
-            '5076_bad_fruit_2'
+            '5076_bad_fruit_2',
+            '5076_bad_fruit_3'
         ]
 
         self.bad_fruits = [None] * 3
@@ -279,7 +279,7 @@ class ArmController(Node):
         while not self.flag_target_loc:
             self.rate.sleep()
             try:
-                self.fertiliser_pose = self.lookup_tf('5076_fertiliser_can')
+                self.fertiliser_pose = self.lookup_tf('5076_fertilizer_1')
                 self.ebot_pose = self.lookup_tf('5076_ebot_6')
                 if self.fertiliser_pose and self.ebot_pose:
                     self.flag_target_loc = True

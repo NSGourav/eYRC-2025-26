@@ -18,6 +18,7 @@ from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import String
 #from linkattacher_msgs.srv import AttachLink, DetachLink
 from std_srvs.srv import SetBool
+from std_msgs.msg import Float32
 from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import tf_transformations
@@ -42,6 +43,7 @@ class ArmController(Node):
         # Subscriber: get current end-effector pose
         self.sub = self.create_subscription(PoseStamped, '/tcp_pose_raw', self.pose_callback, 10,callback_group=self.callback_group)
         self.rate = self.create_rate(1.2, self.get_clock())
+        self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
 
         # Service clients for attach/detach
         self.magnet_client = self.create_client(SetBool, '/magnet')
@@ -50,6 +52,7 @@ class ArmController(Node):
         # self.attach_client = self.create_client(AttachLink, '/attach_link')
         # self.detach_client = self.create_client(DetachLink, '/detach_link')
 
+        self.flag_force = False
         self.current_position = None
         self.current_orientation = None 
         self.current_rotation_matrix = None
@@ -79,11 +82,11 @@ class ArmController(Node):
         self.kd_orientation=0.1
         self.prev_error_orientation=[0.0,0.0,0.0]
 
-        self.attach_names = [
-            'bad_fruit',
-            'bad_fruit',
-            'bad_fruit'
-        ]
+        # self.attach_names = [
+        #     'bad_fruit',
+        #     'bad_fruit',
+        #     'bad_fruit'
+        # ]
 
 
     def pose_callback(self, msg):
@@ -93,6 +96,11 @@ class ArmController(Node):
 
     def arm_vel_publish(self,twist_cmd):
         self.cmd_pub.publish(twist_cmd)
+
+    def force_callback(self, msg):
+        if self.flag_force:
+            force_z = msg.data
+            self.get_logger().info(f'Force in Z: {force_z}')
 
     def control_magnet(self, state):
         request = SetBool.Request()
@@ -200,7 +208,7 @@ class ArmController(Node):
             self.goal_pose_nav(fruit_pose)
 
             # self.gripper_service("attach", self.attach_names[i])
-            self.magnet_client.call_async(SetBool.Request(data=True))
+            self.control_magnet(True)
             time.sleep(1)  # Wait for magnet to activate
 
             fruit_pose[2] += 0.10
@@ -208,8 +216,8 @@ class ArmController(Node):
             self.goal_pose_nav(drop_pose)
 
             # self.gripper_service("detach", self.attach_names[i])
-            self.magnet_client.call_async(SetBool.Request(data=False))
-            time.sleep(1)  # Wait for magnet to diactivate
+            self.control_magnet(False)
+            time.sleep(1)  # Wait for magnet to deactivate
 
         self.goal_pose_nav(home_pose)
         self.flag_fruit=0
@@ -308,7 +316,7 @@ class ArmController(Node):
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
         self.goal_pose_nav(self.fertiliser_pose)
         # self.gripper_service("attach","fertiliser_can")
-        self.magnet_client.call_async(SetBool.Request(data=True))
+        self.control_magnet(True)
         time.sleep(1)  # Wait for magnet to activate
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
 
@@ -316,8 +324,8 @@ class ArmController(Node):
         self.ebot_pose[2]=self.ebot_pose[2]+0.2
         self.goal_pose_nav(self.ebot_pose)
         # self.gripper_service("detach","fertiliser_can")
-        self.magnet_client.call_async(SetBool.Request(data=False))
-        time.sleep(1)  # Wait for magnet to diactivate
+        self.control_magnet(False)
+        time.sleep(1)  # Wait for magnet to deactivate
         self.ebot_pose[0]=self.ebot_pose[0]-0.3
         self.goal_pose_nav(self.ebot_pose)
         response.success = True

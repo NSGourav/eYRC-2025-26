@@ -16,7 +16,8 @@ import tf2_ros
 import numpy as np
 from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import String
-from linkattacher_msgs.srv import AttachLink, DetachLink
+#from linkattacher_msgs.srv import AttachLink, DetachLink
+from std_srvs.srv import SetBool
 from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import tf_transformations
@@ -43,8 +44,11 @@ class ArmController(Node):
         self.rate = self.create_rate(1.2, self.get_clock())
 
         # Service clients for attach/detach
-        self.attach_client = self.create_client(AttachLink, '/attach_link')
-        self.detach_client = self.create_client(DetachLink, '/detach_link')
+        self.magnet_client = self.create_client(SetBool, '/magnet')
+        while not self.magnet_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Magnet service not available, waiting...')
+        # self.attach_client = self.create_client(AttachLink, '/attach_link')
+        # self.detach_client = self.create_client(DetachLink, '/detach_link')
 
         self.current_position = None
         self.current_orientation = None 
@@ -90,30 +94,36 @@ class ArmController(Node):
     def arm_vel_publish(self,twist_cmd):
         self.cmd_pub.publish(twist_cmd)
 
-    def gripper_service(self, command: str,model_n: str):
-        services = {
-            'attach': (self.attach_client, AttachLink),
-            'detach': (self.detach_client, DetachLink)
-        }
+    def control_magnet(self, state):
+        request = SetBool.Request()
+        request.data = state  # True to activate, False to deactivate
+        future = self.magnet_client.call_async(request)
+        return future
 
-        if command not in services:
-            self.get_logger().error('Invalid command: use "attach" or "detach"')
-            return
+    # def gripper_service(self, command: str,model_n: str):
+    #     services = {
+    #         'attach': (self.attach_client, AttachLink),
+    #         'detach': (self.detach_client, DetachLink)
+    #     }
 
-        client, srv_type = services[command]
+    #     if command not in services:
+    #         self.get_logger().error('Invalid command: use "attach" or "detach"')
+    #         return
 
-        request = srv_type.Request()
-        request.model1_name = model_n
-        request.link1_name  = 'body'
-        request.model2_name = 'ur5'
-        request.link2_name  = 'wrist_3_link'
+    #     client, srv_type = services[command]
 
-        if not client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error(f'{command} service not available')
-            return
+    #     request = srv_type.Request()
+    #     request.model1_name = model_n
+    #     request.link1_name  = 'body'
+    #     request.model2_name = 'ur5'
+    #     request.link2_name  = 'wrist_3_link'
 
-        self.service_future = client.call_async(request)
-        self.get_logger().info(f'→ {command} request sent')
+    #     if not client.wait_for_service(timeout_sec=1.0):
+    #         self.get_logger().error(f'{command} service not available')
+    #         return
+
+    #     self.service_future = client.call_async(request)
+    #     self.get_logger().info(f'→ {command} request sent')
     
     def lookup_tf(self, frame_id, timeout_sec=2.0):
         start = self.get_clock().now()
@@ -189,13 +199,17 @@ class ArmController(Node):
             fruit_pose[2] -= 0.08
             self.goal_pose_nav(fruit_pose)
 
-            self.gripper_service("attach", self.attach_names[i])
+            # self.gripper_service("attach", self.attach_names[i])
+            self.magnet_client.call_async(SetBool.Request(data=True))
+            time.sleep(1)  # Wait for magnet to activate
 
             fruit_pose[2] += 0.10
             self.goal_pose_nav(fruit_pose)
             self.goal_pose_nav(drop_pose)
 
-            self.gripper_service("detach", self.attach_names[i])
+            # self.gripper_service("detach", self.attach_names[i])
+            self.magnet_client.call_async(SetBool.Request(data=False))
+            time.sleep(1)  # Wait for magnet to diactivate
 
         self.goal_pose_nav(home_pose)
         self.flag_fruit=0
@@ -293,13 +307,17 @@ class ArmController(Node):
         
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
         self.goal_pose_nav(self.fertiliser_pose)
-        self.gripper_service("attach","fertiliser_can")
+        # self.gripper_service("attach","fertiliser_can")
+        self.magnet_client.call_async(SetBool.Request(data=True))
+        time.sleep(1)  # Wait for magnet to activate
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
 
         self.goal_pose_nav(self.fertiliser_pose)
         self.ebot_pose[2]=self.ebot_pose[2]+0.2
         self.goal_pose_nav(self.ebot_pose)
-        self.gripper_service("detach","fertiliser_can")
+        # self.gripper_service("detach","fertiliser_can")
+        self.magnet_client.call_async(SetBool.Request(data=False))
+        time.sleep(1)  # Wait for magnet to diactivate
         self.ebot_pose[0]=self.ebot_pose[0]-0.3
         self.goal_pose_nav(self.ebot_pose)
         response.success = True

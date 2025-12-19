@@ -18,11 +18,9 @@ from geometry_msgs.msg import PoseStamped,TwistStamped
 from std_msgs.msg import Float64MultiArray
 
 from std_msgs.msg import String
-from linkattacher_msgs.srv import AttachLink, DetachLink
 from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import tf_transformations
-from std_srvs.srv import Trigger
 import time
 from std_srvs.srv import SetBool
 from std_msgs.msg import Float32
@@ -63,11 +61,11 @@ class ArmController(Node):
         self.ebot_pose = None
         self.home_location=[]
 
-        # Error positions
+        # Error tolerance
         self.pos_tol = 0.02  # Position tolerance
         self.ori_tol = 0.01  # Orientation tolerance
         self.omega_limit=1.0
-        self.v_limit=0.1
+        self.v_max=0.1
         self.v_min = 0.015
         
         # Control loop parameters
@@ -248,7 +246,7 @@ class ArmController(Node):
                 e_p_base = target_pos - self.current_position
                 e_p_ee = self.current_rotation_matrix.T @ e_p_base
                 v_ee = self.kp_position * e_p_ee
-                v_ee = np.clip(v_ee, -self.v_limit, self.v_limit)
+                v_ee = np.clip(v_ee, -self.v_max, self.v_max)
                 v_ee = np.where(
                     np.abs(v_ee) < self.v_min,
                     self.v_min * np.sign(v_ee),

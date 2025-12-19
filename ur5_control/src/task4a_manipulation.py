@@ -14,7 +14,9 @@ import rclpy
 from rclpy.node import Node
 import tf2_ros
 import numpy as np
-from geometry_msgs.msg import Twist, PoseStamped
+from geometry_msgs.msg import PoseStamped,TwistStamped
+from std_msgs.msg import Float64MultiArray
+
 from std_msgs.msg import String
 from linkattacher_msgs.srv import AttachLink, DetachLink
 from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
@@ -35,12 +37,12 @@ class ArmController(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher: publish end-effector velocity commands
-        self.cmd_pub = self.create_publisher(Twist, "/delta_twist_cmds", 10)
+        self.cmd_pub = self.create_publisher(TwistStamped, "/delta_twist_cmds", 10)
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group=MutuallyExclusiveCallbackGroup()
         
         # Subscriber: get current end-effector pose
-        self.sub = self.create_subscription(PoseStamped, '/tcp_pose_raw', self.pose_callback, 10,callback_group=self.callback_group)
+        self.sub = self.create_subscription(Float64MultiArray, '/tcp_pose_raw', self.pose_callback, 10,callback_group=self.callback_group)
         self.rate = self.create_rate(1.2, self.get_clock())
 
         self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
@@ -81,8 +83,9 @@ class ArmController(Node):
 
     def pose_callback(self, msg):
         """ Updates the current position and orientation of the end-effector """
-        self.current_position = np.array([msg.pose.position.x,msg.pose.position.y,msg.pose.position.z])
-        self.current_orientation = np.array([msg.pose.orientation.x,msg.pose.orientation.y,msg.pose.orientation.z,msg.pose.orientation.w])
+        self.current_position = np.array([msg.data[0],msg.data[1],msg.data[2]])
+        self.current_euler = np.array([msg.data[3],msg.data[4],msg.data[5]])
+        self.current_orientation = tf_transformations.quaternion_from_euler(self.current_euler[0],self.current_euler[1], self.current_euler[2])
 
     def arm_vel_publish(self,twist_cmd):
 
@@ -106,13 +109,14 @@ class ArmController(Node):
             lin_base = twist_ee[:3]
             ang_base = twist_ee[3:]
 
-        twist_msg = Twist()
-        twist_msg.linear.x = lin_base[0]
-        twist_msg.linear.y = lin_base[1]
-        twist_msg.linear.z = lin_base[2]
-        twist_msg.angular.x = ang_base[0]
-        twist_msg.angular.y = ang_base[1]
-        twist_msg.angular.z = ang_base[2]
+        twist_msg = TwistStamped()
+        twist_msg.header.stamp = self.get_clock().now().to_msg()
+        twist_msg.twist.linear.x = lin_base[0]
+        twist_msg.twist.linear.y = lin_base[1]
+        twist_msg.twist.linear.z = lin_base[2]
+        twist_msg.twist.angular.x = ang_base[0]
+        twist_msg.twist.angular.y = ang_base[1]
+        twist_msg.twist.angular.z = ang_base[2]
 
         self.cmd_pub.publish(twist_msg)
 
@@ -219,7 +223,7 @@ class ArmController(Node):
         self.stop_arm()
     
     def stop_arm(self):
-        twist_cmd = Twist()
+        twist_cmd = TwistStamped()
         self.arm_vel_publish(twist_cmd)
 
     def goal_pose_nav(self,target_loc):
@@ -259,23 +263,23 @@ class ArmController(Node):
                 z_err = np.cross(z, z_d)
                 err_ori = np.linalg.norm(z_err)
 
-                twist_cmd = Twist()
+                twist_cmd = TwistStamped()
 
                 if err_ori > self.ori_tol and ori_flag == False:
                     omega_world = self.kp_orientation * z_err
                     omega_body = self.current_rotation_matrix.T @ omega_world
                     omega_body = np.clip(omega_body, -self.omega_limit, self.omega_limit)
-                    twist_cmd.angular.x = omega_body[0]
-                    twist_cmd.angular.y = omega_body[1]
-                    twist_cmd.angular.z = omega_body[2]
+                    twist_cmd.twist.angular.x = omega_body[0]
+                    twist_cmd.twist.angular.y = omega_body[1]
+                    twist_cmd.twist.angular.z = omega_body[2]
 
                 elif ori_flag == False:
                     ori_flag = True
 
                 if (norm_ep>self.pos_tol and pose_flag==0): 
-                    twist_cmd.linear.x = v_ee[0]
-                    twist_cmd.linear.y = v_ee[1]
-                    twist_cmd.linear.z = v_ee[2]
+                    twist_cmd.twist.linear.x = v_ee[0]
+                    twist_cmd.twist.linear.y = v_ee[1]
+                    twist_cmd.twist.linear.z = v_ee[2]
 
                 elif pose_flag==0:
                     pose_flag=True

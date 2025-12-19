@@ -204,15 +204,16 @@ class ArmController(Node):
 
             fruit_pose[2] += 0.1
             self.goal_pose_nav(fruit_pose)
-
+            
+            self.flag_force=True
             fruit_pose[2] -= 0.08
             self.goal_pose_nav(fruit_pose)
-
+      
             self.control_magnet(True)
-
             fruit_pose[2] += 0.10
             self.goal_pose_nav(fruit_pose)
             self.goal_pose_nav(drop_pose)
+            self.flag_force=False
 
             self.control_magnet(False)
 
@@ -321,6 +322,7 @@ class ArmController(Node):
         
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
         self.goal_pose_nav(self.fertiliser_pose)
+        self.flag_force=True
         self.control_magnet(True)
         self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
         self.goal_pose_nav(self.fertiliser_pose)
@@ -328,6 +330,7 @@ class ArmController(Node):
         self.ebot_pose[2]=self.ebot_pose[2]+0.2
         self.goal_pose_nav(self.ebot_pose)
         self.control_magnet(False)
+        self.flag_force=False
         self.ebot_pose[0]=self.ebot_pose[0]-0.3
         self.goal_pose_nav(self.ebot_pose)
         self.flag_fruit=1

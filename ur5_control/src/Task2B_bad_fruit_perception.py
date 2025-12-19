@@ -103,7 +103,7 @@ class FruitsTF(Node):
         # Find contours in GREEN mask
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        fruit_id = 0
+        fruit_id = 1
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < 10 or area > 5000:

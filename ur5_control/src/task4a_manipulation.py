@@ -216,7 +216,11 @@ class ArmController(Node):
 
         self.goal_pose_nav(home_pose)
         self.flag_fruit=2
-
+        self.stop_arm()
+    
+    def stop_arm(self):
+        twist_cmd = Twist()
+        self.arm_vel_publish(twist_cmd)
 
     def goal_pose_nav(self,target_loc):
 
@@ -325,6 +329,8 @@ class ArmController(Node):
         self.ebot_pose[0]=self.ebot_pose[0]-0.3
         self.goal_pose_nav(self.ebot_pose)
         self.flag_fruit=1
+        self.stop_arm()
+
 
     
 def main():

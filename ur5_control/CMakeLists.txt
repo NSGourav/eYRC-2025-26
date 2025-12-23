@@ -24,6 +24,10 @@ endif()
 # Install Python scripts
 install(PROGRAMS
     src/task1b_boiler_plate.py
+    src/Task2B_aruco_perception.py
+    src/Task2B_bad_fruit_perception.py
+    src/Task3A_fruits_fert_tfs.py
+    src/Task4B_nav.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS

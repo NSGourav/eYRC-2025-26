@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String, ColorRGBA
+from std_msgs.msg import String, ColorRGBA, Float32
 from geometry_msgs.msg import Twist, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import euler_from_quaternion
@@ -34,6 +34,7 @@ class ebotNav3B(Node):
         self.declare_parameter('enable_visualization', True)  # Can be set via launch file or CLI
 
         self.create_subscription(Odometry,"/odom",self.odom_callback,10)
+        self.create_subscription(Float32,'/orientation',self.orientation_callback,10)
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
         self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
@@ -105,8 +106,8 @@ class ebotNav3B(Node):
         self.min_lidar_angle= -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
         self.max_lidar_angle= 70.0 * pi / 180.0  
 
-        self.V_MIN, self.V_MAX = 0.0, 2.0
-        self.W_MIN, self.W_MAX = -2.5, 2.5        # Increased from ±1.5 to allow faster rotation
+        self.V_MIN, self.V_MAX = 0.0, 0.5
+        self.W_MIN, self.W_MAX = -0.5, 0.5        # Increased from ±1.5 to allow faster rotation
         self.A_MIN, self.A_MAX = -1.0, 1.0
         self.AL_MIN, self.AL_MAX = -0.5, 0.5      # Increased from ±0.2 for quicker rotation changes
         
@@ -137,11 +138,12 @@ class ebotNav3B(Node):
     def odom_callback(self,msg:Odometry):
         self.current_x=msg.pose.pose.position.x
         self.current_y=msg.pose.pose.position.y
-        q=msg.pose.pose.orientation
-        _,_,self.current_yaw=euler_from_quaternion([q.x,q.y,q.z,q.w])
         
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
+
+    def orientation_callback(self, msg: Float32):
+        self.current_yaw = msg.data-pi
 
     def set_intermediate_goal_callback(self, msg: String):
         """Service-like callback to set an intermediate goal (x,y format: 'x,y')"""

@@ -34,7 +34,7 @@ class ebotNav3B(Node):
         self.declare_parameter('enable_visualization', True)  # Can be set via launch file or CLI
 
         self.create_subscription(Odometry,"/odom",self.odom_callback,10)
-        # self.create_subscription(Float32,'/orientation',self.orientation_callback,10)
+        self.create_subscription(Float32,'/orientation',self.orientation_callback,10)
         self.create_subscription(LaserScan,"/scan",self.scan_callback,10)
         self.create_subscription(String,"/detection_status",self.shape_callback,10)
         self.create_subscription(String,"/set_intermediate_goal",self.set_intermediate_goal_callback,10)
@@ -71,7 +71,14 @@ class ebotNav3B(Node):
         self.detected_shape_status = None
 
         self.waypoints = [
-            [2.072, -1.704, 1.57]            # P1: (x1, y1, yaw1)
+            [2.072, -1.704, 1.57],           # dock
+            [5.035, -1.857, 1.57],           # 1st lane end
+            [4.495, 0.006, -1.57],           # 2nd lane start
+            [1.448, 0.072, -1.57],           # 2nd lane end
+            [1.108, 1.656, 1.57],            # 3rd lane start
+            [5.379, 1.955, 1.57],            # 3rd lane end
+            [4.495, 0.006, -1.57],           # 2nd lane start
+            [0.0, 0.0, -1.57]               # Home
             # [0.26, 1.1, 1.57],
             # [-1.53, 1.1, -1.57],
             # [-1.53, -5.52, -1.57],
@@ -138,14 +145,14 @@ class ebotNav3B(Node):
     def odom_callback(self,msg:Odometry):
         self.current_x=msg.pose.pose.position.x
         self.current_y=msg.pose.pose.position.y
-        q = msg.pose.pose.orientation
-        _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        self.current_yaw = yaw
+        # q = msg.pose.pose.orientation
+        # _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        # self.current_yaw = yaw
         self.curr_vx = msg.twist.twist.linear.x
         self.curr_w = msg.twist.twist.angular.z
 
-    # def orientation_callback(self, msg: Float32):
-    #     self.current_yaw = msg.data-pi
+    def orientation_callback(self, msg: Float32):
+        self.current_yaw = msg.data if msg.data <= pi else (msg.data - 2 * pi)
 
     def set_intermediate_goal_callback(self, msg: String):
         """Service-like callback to set an intermediate goal (x,y format: 'x,y')"""

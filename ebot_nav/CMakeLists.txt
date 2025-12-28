@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(ur5_control)
+project(ebot_nav)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -8,6 +8,13 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -21,20 +28,11 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# Install Python scripts
 install(PROGRAMS
-    src/task1b_boiler_plate.py
-    src/Task2B_aruco_perception.py
-    src/Task2B_bad_fruit_perception.py
-    src/Task3A_fruits_fert_tfs.py
-    DESTINATION lib/${PROJECT_NAME}
+      src/shape_detect.py
+      src/ebot_dwa.py
+      src/ebot_nav.py
+        DESTINATION lib/${PROJECT_NAME}
 )
-install(PROGRAMS
-    src/task1c.py
-    DESTINATION lib/${PROJECT_NAME}
-)
-install(PROGRAMS
-    src/bonus_task2_boiler_plate.py
-    DESTINATION lib/${PROJECT_NAME}
-)
+
 ament_package()

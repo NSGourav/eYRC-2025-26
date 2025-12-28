@@ -74,13 +74,7 @@ class ebotNav3B(Node):
         self.current_yaw = 1.57  # Facing forwards
 
         self.waypoints = None          # dock
-            # [5.035, -1.857, 1.57],           # 1st lane end
-            # [4.495, 0.006, -1.57],           # 2nd lane start
-            # [1.448, 0.072, -1.57],           # 2nd lane end
-            # [1.108, 1.656, 1.57],            # 3rd lane start
-            # [5.379, 1.955, 1.57],            # 3rd lane end
-            # [4.495, 0.006, -1.57],           # 2nd lane start
-            # [0.0, 0.0, -1.57]               # Home
+
         self.curr_vx = 0.0; self.curr_w = 0.0
         self.obstacles = np.empty((0,2))
 

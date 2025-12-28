@@ -53,7 +53,8 @@ class HoughLineDetector(Node):
     MAX_PENTAGON_SQUARE_LENGTH = 0.35
 
     # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y = 0.20  # 15cm offset in y-direction (perpendicular to robot's approach)
+    SAFETY_OFFSET_Y = 0.20  # 20cm offset in y-direction (perpendicular to robot's approach)
+    SAFETY_OFFSET_X_SQUARE = 0.10  # 10cm offset in x-direction for Square (push away from robot)
 
     def __init__(self):
         super().__init__('hough_line_detector')
@@ -68,7 +69,7 @@ class HoughLineDetector(Node):
         self.theta_resolution = np.pi / 360
         self.hough_threshold = 12
         self.min_line_length = 0.08
-        self.max_line_gap = 0.03
+        self.max_line_gap = 0.05  # Increased to 5cm to merge broken segments
 
         # Minimum line length to filter noise (3cm)
         self.min_valid_line_length = 0.03
@@ -79,7 +80,7 @@ class HoughLineDetector(Node):
 
         # Line processing
         self.merge_angle_tolerance = 10
-        self.merge_distance_tolerance = 0.12
+        self.merge_distance_tolerance = 0.05  # 5cm - merge collinear lines with small gaps
 
         # Detection tracking
         self.detected_shapes: List[ShapeDetection] = []
@@ -121,6 +122,7 @@ class HoughLineDetector(Node):
         self.shape_pub = self.create_publisher(String, '/detection_status', 10)
         self.intermediate_goal_pub = self.create_publisher(String, '/set_intermediate_goal', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
+        self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10)  # Priority navigation
 
         # Visualization setup
         if self.enable_visualization:
@@ -240,7 +242,7 @@ class HoughLineDetector(Node):
                     if shape_type in ['Square', 'Triangle']:
                         goal_world_pos = self.local_to_world(
                             shape_position, scan_position_x, scan_position_y, scan_yaw,
-                            apply_safety=True
+                            apply_safety=True, shape_type=shape_type
                         )
                     else:
                         # Pentagon (dock) - no offset needed
@@ -278,8 +280,13 @@ class HoughLineDetector(Node):
                             f'  Total detections: {len(self.detected_shapes)}'
                         )
 
-                    # Send intermediate goal for Square and Triangle (not Pentagon/dock)
+                    # Publish shape pose for priority navigation (Square and Triangle only)
                     if shape_type in ['Square', 'Triangle']:
+                        pose_msg = String()
+                        pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f}"
+                        self.shape_pose_pub.publish(pose_msg)
+                        self.get_logger().info(f"Published shape pose: {pose_msg.data}")
+
                         self.pending_shape = (shape_status, plant_id)
                         self.send_intermediate_goal(goal_world_pos, shape_type)
                     else:
@@ -544,26 +551,35 @@ class HoughLineDetector(Node):
         self.get_logger().warn(f"Could not assign plant_id - robot at ({robot_x:.3f}, {robot_y:.3f}) in Lane {current_lane}")
         return None
 
-    def apply_safety_offset(self, local_pos: np.ndarray) -> np.ndarray:
+    def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
         """Apply safety offset to shape position to prevent collision
 
-        Shifts the goal position toward the robot's centerline by SAFETY_OFFSET_Y
+        Y-offset: Shifts goal toward robot's centerline by SAFETY_OFFSET_Y
         - If shape is on left (negative y), add positive offset (move right toward robot)
         - If shape is on right (positive y), add negative offset (move left toward robot)
+
+        X-offset: For Square only, push forward by SAFETY_OFFSET_X_SQUARE (away from robot)
+        - Adds to X to move goal further away from robot
         """
         offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y if local_pos[1] != 0 else 0.0
-        adjusted_pos = np.array([local_pos[0], local_pos[1] + offset_y])
+        offset_x = 0.0
+
+        # For Square: add X offset away from robot (positive X direction - push forward)
+        if shape_type == 'Square':
+            offset_x = self.SAFETY_OFFSET_X_SQUARE
+
+        adjusted_pos = np.array([local_pos[0] + offset_x, local_pos[1] + offset_y])
 
         self.get_logger().debug(
-            f'Safety offset applied: ({local_pos[0]:.3f}, {local_pos[1]:.3f}) -> '
-            f'({adjusted_pos[0]:.3f}, {adjusted_pos[1]:.3f}) [offset_y={offset_y:.3f}m]'
+            f'Safety offset applied ({shape_type}): ({local_pos[0]:.3f}, {local_pos[1]:.3f}) -> '
+            f'({adjusted_pos[0]:.3f}, {adjusted_pos[1]:.3f}) [offset_x={offset_x:.3f}m, offset_y={offset_y:.3f}m]'
         )
 
         return adjusted_pos
 
     def local_to_world(self, local_pos: np.ndarray, robot_x: float = None,
                       robot_y: float = None, robot_yaw: float = None,
-                      apply_safety: bool = False) -> np.ndarray:
+                      apply_safety: bool = False, shape_type: str = None) -> np.ndarray:
         """Convert local laser frame coordinates to world coordinates
 
         Steps:
@@ -581,7 +597,7 @@ class HoughLineDetector(Node):
 
         # Apply safety offset if requested (for navigation goals)
         if apply_safety:
-            local_pos = self.apply_safety_offset(local_pos)
+            local_pos = self.apply_safety_offset(local_pos, shape_type=shape_type)
 
         # Step 1: Transform from laser frame to base_link frame
         # Add the laser offset (laser is ahead/to-side of base_link)
@@ -877,7 +893,8 @@ class HoughLineDetector(Node):
         to_mid = mid2 - line1['start']
         perp_dist = np.linalg.norm(to_mid - np.dot(to_mid, dir1) * dir1)
 
-        return min_dist < self.merge_distance_tolerance or (perp_dist < 0.04 and min_dist < 0.20)
+        # Merge if: endpoints are close OR lines are collinear with small gap
+        return min_dist < self.merge_distance_tolerance or (perp_dist < 0.05 and min_dist < 0.30)
 
     def merge_group(self, group: List[Dict]) -> Dict:
         """Merge multiple lines into one"""

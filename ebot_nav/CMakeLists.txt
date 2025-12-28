@@ -29,10 +29,10 @@ if(BUILD_TESTING)
 endif()
 
 install(PROGRAMS
-      src/shape_detect.py
-      src/ebot_dwa.py
-      src/ebot_nav.py
-        DESTINATION lib/${PROJECT_NAME}
+    src/shape_detect.py
+    src/ebot_dwa.py
+    src/ebot_nav.py
+    DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

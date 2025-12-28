@@ -6,9 +6,12 @@ Cleaned and simplified version with unnecessary code removed
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -23,7 +26,8 @@ from dataclasses import dataclass
 class ShapeDetection:
     """Data structure for a detected shape"""
     local_position: np.ndarray
-    world_position: np.ndarray
+    world_position: np.ndarray  # Actual position (for duplicate checking)
+    goal_position: np.ndarray   # Navigation goal (with safety offset for visualization)
     shape_type: str
     distance: float
     plant_id: Optional[int]
@@ -38,15 +42,18 @@ class HoughLineDetector(Node):
     }
 
     # Angle tolerances for shape detection (degrees)
-    TRIANGLE_ANGLE_45 = (135, 5)  # (target, tolerance)
-    TRIANGLE_ANGLE_130 = (130, 7)
-    SQUARE_ANGLE = (90, 5)
-    PENTAGON_ANGLES = [(90, 5), (140, 5)]
+    TRIANGLE_ANGLE_40 = (140, 10)  # (target, tolerance) - increased tolerance
+    TRIANGLE_ANGLE_130 = (130, 10)
+    SQUARE_ANGLE = (90, 10)  # increased tolerance
+    PENTAGON_ANGLES = [(90, 8), (140, 8)]
 
     # Distance thresholds
-    CORNER_GAP_MAX = 0.03  # Max gap between connected lines
-    MAX_TRIANGLE_LENGTH = 0.25
-    MAX_PENTAGON_SQUARE_LENGTH = 0.3
+    CORNER_GAP_MAX = 0.06  # Max gap between connected lines - increased for better detection
+    MAX_TRIANGLE_LENGTH = 0.30
+    MAX_PENTAGON_SQUARE_LENGTH = 0.35
+
+    # Safety offset to prevent robot collision with shape
+    SAFETY_OFFSET_Y = 0.20  # 15cm offset in y-direction (perpendicular to robot's approach)
 
     def __init__(self):
         super().__init__('hough_line_detector')
@@ -63,6 +70,9 @@ class HoughLineDetector(Node):
         self.min_line_length = 0.08
         self.max_line_gap = 0.03
 
+        # Minimum line length to filter noise (3cm)
+        self.min_valid_line_length = 0.03
+
         # Image conversion
         self.pixels_per_meter = 300
         self.image_size = 800
@@ -73,7 +83,7 @@ class HoughLineDetector(Node):
 
         # Detection tracking
         self.detected_shapes: List[ShapeDetection] = []
-        self.detection_range = 0.3
+        self.detection_range = 1.0  # Minimum 1m separation between shapes
         self.pending_shape: Optional[Tuple[str, int]] = None  # (shape_status, plant_id)
 
         # Robot state
@@ -81,17 +91,28 @@ class HoughLineDetector(Node):
         self.position_y = 0.0
         self.yaw = 0.0
 
+        # Laser scanner offset from base_link (cached from TF)
+        self.laser_offset_x = 0.0
+        self.laser_offset_y = 0.0
+        self.laser_offset_cached = False
+
+        # TF buffer for getting laser offset
+        self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         # Detection flow control
         self.detection_paused = False
         self.pending_intermediate_goal = False
 
-        # TF for accurate transforms
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
         # ROS2 parameters
         self.declare_parameter('enable_visualization', True)
+        self.declare_parameter('debug_mode', False)
         self.enable_visualization = self.get_parameter('enable_visualization').value
+        self.debug_mode = self.get_parameter('debug_mode').value
+
+        # Set logging level based on debug mode
+        if self.debug_mode:
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
 
         # ROS2 communication
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
@@ -99,6 +120,7 @@ class HoughLineDetector(Node):
         self.create_subscription(String, "/intermediate_goal_response", self.goal_response_callback, 10)
         self.shape_pub = self.create_publisher(String, '/detection_status', 10)
         self.intermediate_goal_pub = self.create_publisher(String, '/set_intermediate_goal', 10)
+        self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
 
         # Visualization setup
         if self.enable_visualization:
@@ -156,7 +178,10 @@ class HoughLineDetector(Node):
             if self.detection_paused:
                 return
 
-            # Get robot pose at scan timestamp using TF
+            # Cache laser offset from TF (only done once)
+            self._cache_laser_offset(msg.header.frame_id)
+
+            # Get robot pose at scan timestamp using odometry
             scan_position_x, scan_position_y, scan_yaw = self._get_scan_pose(msg)
 
             # Process scan data
@@ -186,8 +211,23 @@ class HoughLineDetector(Node):
             shape_position = self._calculate_shape_position(best_group, shape_type)
             shape_distance = np.linalg.norm(shape_position)
 
+            # Log detection summary
+            if shape_type:
+                self.get_logger().info(
+                    f'Shape candidate: {shape_type} | '
+                    f'Lines: {len(best_group)} | '
+                    f'Local pos: ({shape_position[0]:.3f}, {shape_position[1]:.3f}) | '
+                    f'Distance: {shape_distance:.3f}m'
+                )
+
             # Process valid detections
             if shape_type in ['Pentagon', 'Square', 'Triangle']:
+                # Log robot pose being used for transformation
+                self.get_logger().info(
+                    f'Robot pose for transform: x={scan_position_x:.3f}, y={scan_position_y:.3f}, '
+                    f'yaw={math.degrees(scan_yaw):.1f}°'
+                )
+
                 is_new, world_pos = self.is_new_detection(
                     shape_position, scan_position_x, scan_position_y, scan_yaw
                 )
@@ -196,28 +236,62 @@ class HoughLineDetector(Node):
                     plant_id = self.assign_plant_id(world_pos, scan_position_x, scan_position_y)
                     shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
 
-                    # Store detection
+                    # Calculate goal position with safety offset for navigation/visualization
+                    if shape_type in ['Square', 'Triangle']:
+                        goal_world_pos = self.local_to_world(
+                            shape_position, scan_position_x, scan_position_y, scan_yaw,
+                            apply_safety=True
+                        )
+                    else:
+                        # Pentagon (dock) - no offset needed
+                        goal_world_pos = world_pos
+
+                    # Store detection with both actual and goal positions
                     detection = ShapeDetection(
                         local_position=shape_position,
-                        world_position=world_pos,
+                        world_position=world_pos,      # Actual position (for duplicate checking)
+                        goal_position=goal_world_pos,  # Goal position (for navigation & visualization)
                         shape_type=shape_type,
                         distance=shape_distance,
                         plant_id=plant_id
                     )
                     self.detected_shapes.append(detection)
 
-                    self.get_logger().info(
-                        f'NEW {shape_type}: local({shape_position[0]:.2f}, {shape_position[1]:.2f}), '
-                        f'world({world_pos[0]:.2f}, {world_pos[1]:.2f}) | Total: {len(self.detected_shapes)}'
-                    )
+                    # Log detection info
+                    if shape_type in ['Square', 'Triangle']:
+                        self.get_logger().info(
+                            f'✓ NEW {shape_type} DETECTED:\n'
+                            f'  Local:  ({shape_position[0]:.3f}, {shape_position[1]:.3f}) m\n'
+                            f'  Actual: ({world_pos[0]:.3f}, {world_pos[1]:.3f}) m\n'
+                            f'  Goal:   ({goal_world_pos[0]:.3f}, {goal_world_pos[1]:.3f}) m (with {self.SAFETY_OFFSET_Y}m safety offset)\n'
+                            f'  Robot:  ({scan_position_x:.3f}, {scan_position_y:.3f}, {math.degrees(scan_yaw):.1f}°)\n'
+                            f'  Plant ID: {plant_id}\n'
+                            f'  Total detections: {len(self.detected_shapes)}'
+                        )
+                    else:
+                        self.get_logger().info(
+                            f'✓ NEW {shape_type} DETECTED:\n'
+                            f'  Local:  ({shape_position[0]:.3f}, {shape_position[1]:.3f}) m\n'
+                            f'  World:  ({world_pos[0]:.3f}, {world_pos[1]:.3f}) m\n'
+                            f'  Robot:  ({scan_position_x:.3f}, {scan_position_y:.3f}, {math.degrees(scan_yaw):.1f}°)\n'
+                            f'  Plant ID: {plant_id}\n'
+                            f'  Total detections: {len(self.detected_shapes)}'
+                        )
 
                     # Send intermediate goal for Square and Triangle (not Pentagon/dock)
                     if shape_type in ['Square', 'Triangle']:
                         self.pending_shape = (shape_status, plant_id)
-                        self.send_intermediate_goal(world_pos, shape_type)
+                        self.send_intermediate_goal(goal_world_pos, shape_type)
                     else:
                         self.get_logger().info(f"{shape_type} detected (dock station - no intermediate goal)")
+
+                    # Publish updated markers to RViz
+                    self.publish_shape_markers()
                 else:
+                    self.get_logger().info(
+                        f'✗ DUPLICATE {shape_type} ignored (within 1.0m of existing detection)\n'
+                        f'  Current world pos: ({world_pos[0]:.3f}, {world_pos[1]:.3f})'
+                    )
                     shape_type = f'{shape_type} (Already Detected)'
 
             self.visualize(filtered_points, binary_image, best_group, shape_type, shape_position)
@@ -227,29 +301,40 @@ class HoughLineDetector(Node):
             import traceback
             self.get_logger().error(traceback.format_exc())
 
-    def _get_scan_pose(self, msg: LaserScan) -> Tuple[float, float, float]:
-        """Get robot pose at scan timestamp using TF"""
+    def _cache_laser_offset(self, scan_frame: str):
+        """Cache the static transform from base_link to laser scanner (only called once)"""
+        if self.laser_offset_cached:
+            return
+
         try:
+            # Get static transform from base_link to laser frame
             transform = self.tf_buffer.lookup_transform(
-                'odom',
                 'ebot_base_link',
-                msg.header.stamp,
-                timeout=Duration(seconds=0.5)
+                scan_frame,
+                Time(),
+                timeout=Duration(seconds=1.0)
             )
 
-            scan_x = transform.transform.translation.x
-            scan_y = transform.transform.translation.y
+            self.laser_offset_x = transform.transform.translation.x
+            self.laser_offset_y = transform.transform.translation.y
+            self.laser_offset_cached = True
 
-            quat = transform.transform.rotation
-            siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
-            cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
-            scan_yaw = math.atan2(siny_cosp, cosy_cosp)
-
-            return scan_x, scan_y, scan_yaw
+            self.get_logger().info(
+                f'Laser offset cached: x={self.laser_offset_x:.3f}m, y={self.laser_offset_y:.3f}m '
+                f'(from {scan_frame} to ebot_base_link)'
+            )
 
         except TransformException as ex:
-            self.get_logger().warn(f'Could not get transform at scan time, using current odometry: {ex}')
-            return self.position_x, self.position_y, self.yaw
+            self.get_logger().warn(f'Could not get laser offset, assuming 0: {ex}', throttle_duration_sec=5.0)
+            self.laser_offset_x = 0.0
+            self.laser_offset_y = 0.0
+            # Don't set cached=True, will retry next time
+
+    def _get_scan_pose(self, msg: LaserScan) -> Tuple[float, float, float]:
+        """Get robot pose - using odometry for consistency"""
+        # Use current odometry directly - more reliable than TF for this application
+        # TF can have timing issues and extrapolation problems
+        return self.position_x, self.position_y, self.yaw
 
     def _find_best_group(self, line_groups: List[List[Dict]]) -> Optional[List[Dict]]:
         """Find the best line group based on scoring"""
@@ -266,55 +351,139 @@ class HoughLineDetector(Node):
         return best_group
 
     def _calculate_shape_position(self, lines: List[Dict], shape_type: str) -> np.ndarray:
-        """Calculate shape position based on type"""
-        if shape_type == 'Triangle' and len(lines) >= 2:
-            return lines[1]['end']
-        elif shape_type == 'Square' and len(lines) >= 3:
-            return self.compute_corner(lines[1], lines[2])
-        else:
-            # Default: centroid of all endpoints
-            all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
-            return np.mean(all_endpoints, axis=0)
+        """Calculate shape position based on type - returns the nearest corner/point to robot"""
+        all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
+
+        if shape_type == 'Triangle':
+            # For triangle: find the corner vertex (point where two lines meet)
+            if len(lines) == 2:
+                # 2-line triangle: use the corner between the two lines
+                corner = self.compute_corner(lines[0], lines[1])
+                self.get_logger().debug(f'Triangle position (2-line corner): ({corner[0]:.3f}, {corner[1]:.3f})')
+                return corner
+            elif len(lines) >= 4:
+                # 4-line triangle: use corner between lines 1 and 2 (middle vertex)
+                corner = self.compute_corner(lines[1], lines[2])
+                self.get_logger().debug(f'Triangle position (4-line corner): ({corner[0]:.3f}, {corner[1]:.3f})')
+                return corner
+
+        elif shape_type == 'Square':
+            # For square: use the nearest corner to robot (which is at origin in local frame)
+            if len(lines) >= 3:
+                corner = self.compute_corner(lines[1], lines[2])
+                self.get_logger().debug(f'Square position (corner): ({corner[0]:.3f}, {corner[1]:.3f})')
+                return corner
+
+        # Default: use centroid of all line endpoints
+        centroid = np.mean(all_endpoints, axis=0)
+        self.get_logger().debug(f'Shape position (centroid): ({centroid[0]:.3f}, {centroid[1]:.3f})')
+        return centroid
 
     def detect_shape(self, lines: List[Dict]) -> Optional[str]:
         """Detect shape type from line segments"""
-        if len(lines) == 2 and lines[1]['length'] < self.MAX_TRIANGLE_LENGTH:
+        num_lines = len(lines)
+        self.get_logger().debug(f'Analyzing {num_lines} lines for shape detection')
+
+        # 2-line Triangle detection (STRICTER VERSION to reduce false positives)
+        if num_lines == 2:
             angle = self.calc_angle(lines[0], lines[1])
-            angle = 180 - angle
+            angle_inv = 180 - angle
             dist = math.sqrt((lines[0]['end'][0] - lines[1]['start'][0])**2 +
                            (lines[0]['end'][1] - lines[1]['start'][1])**2)
 
-            target_angle, tolerance = self.TRIANGLE_ANGLE_45
-            if abs(angle - target_angle) < tolerance and dist < self.CORNER_GAP_MAX:
-                self.get_logger().info(f'Detected Triangle (2 lines, angle={angle:.1f}°)')
-                return 'Triangle'
+            self.get_logger().info(f'2-line candidate: angle={angle:.1f}°, inv_angle={angle_inv:.1f}°, '
+                                  f'gap={dist:.3f}m, L1={lines[0]["length"]:.3f}m, L2={lines[1]["length"]:.3f}m')
 
-        if len(lines) == 3 and lines[1]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH and lines[2]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH:
-            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(len(lines)-1)]
+            target_angle, tolerance = self.TRIANGLE_ANGLE_40
+
+            angle_ok = abs(angle_inv - target_angle) < 6  # Tighter: was 8
+            gap_ok = dist < self.CORNER_GAP_MAX
+            length_ok = (lines[0]['length'] < self.MAX_TRIANGLE_LENGTH and
+                        lines[1]['length'] < self.MAX_TRIANGLE_LENGTH and
+                        lines[0]['length'] > 0.10 and lines[1]['length'] > 0.07)  
+            ratio = max(lines[0]['length'], lines[1]['length']) / max(min(lines[0]['length'], lines[1]['length']), 0.01)
+            ratio_ok = ratio < 3.0  # Lines shouldn't differ by more than 3x
+
+            if angle_ok and gap_ok and length_ok and ratio_ok:
+                self.get_logger().info(
+                    f'✓ Triangle detected (2 lines, angle={angle_inv:.1f}°, gap={dist:.3f}m, '
+                    f'ratio={ratio:.2f})'
+                )
+                return 'Triangle'
+            else:
+                self.get_logger().debug(
+                    f'2-line rejected: angle_ok={angle_ok}, gap_ok={gap_ok}, '
+                    f'length_ok={length_ok}, ratio_ok={ratio_ok} (ratio={ratio:.2f})'
+                )
+
+        # 3-line detection (Square or Pentagon)
+        if num_lines == 3:
+            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(num_lines-1)]
+            lengths = [l['length'] for l in lines]
+
+            # Check corner gaps
+            gaps = []
+            for i in range(num_lines-1):
+                gap = math.sqrt((lines[i]['end'][0] - lines[i+1]['start'][0])**2 +
+                               (lines[i]['end'][1] - lines[i+1]['start'][1])**2)
+                gaps.append(gap)
+
+            self.get_logger().info(f'3-line candidate: angles={[f"{a:.1f}" for a in angles]}°, '
+                                  f'lengths={[f"{l:.3f}" for l in lengths]}m, gaps={[f"{g:.3f}" for g in gaps]}m')
 
             # Pentagon: 90° and 140° angles
-            if abs(angles[0] - 90) < 5 and abs(angles[1] - 140) < 5:
+            if (abs(angles[0] - 90) < 7 and abs(angles[1] - 140) < 7 and
+                all(g < self.CORNER_GAP_MAX for g in gaps)):
+                self.get_logger().info(f'✓ Pentagon detected (3 lines, angles={[f"{a:.1f}" for a in angles]}°)')
                 return 'Pentagon'
 
             # Square: all 90° angles
-            elif all(abs(a - 90) < 5 for a in angles):
+            if (all(abs(a - 90) < 10 for a in angles) and
+                all(g < self.CORNER_GAP_MAX for g in gaps) and
+                lines[1]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH and
+                lines[2]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH):
+                self.get_logger().info(f'✓ Square detected (3 lines, angles={[f"{a:.1f}" for a in angles]}°)')
                 return 'Square'
 
-        if len(lines) == 4:
-            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(len(lines)-1)]
+        # 4-line Triangle detection
+        if num_lines == 4:
+            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(num_lines-1)]
+            lengths = [l['length'] for l in lines]
 
-            # Check corner gaps
-            for i in range(len(lines)-1):
-                dist = math.sqrt((lines[i]['end'][0] - lines[i+1]['start'][0])**2 +
+            # Check corner gaps (but don't reject immediately)
+            gaps = []
+            for i in range(num_lines-1):
+                gap = math.sqrt((lines[i]['end'][0] - lines[i+1]['start'][0])**2 +
                                (lines[i]['end'][1] - lines[i+1]['start'][1])**2)
-                if dist > self.CORNER_GAP_MAX:
-                    return None
+                gaps.append(gap)
 
-            # Triangle: 130°-90°-130° pattern
-            if abs(angles[0] - 130) < 7 and abs(angles[1] - 90) < 5 and abs(angles[2] - 130) < 7:
-                self.get_logger().info(f'Detected Triangle (4 lines, angles={angles})')
+            self.get_logger().info(
+                f'4-line candidate: angles={[f"{a:.1f}" for a in angles]}°, '
+                f'lengths={[f"{l:.3f}" for l in lengths]}m, gaps={[f"{g:.3f}" for g in gaps]}m'
+            )
+
+            # Triangle: 130°-90°-130° pattern (more relaxed tolerances)
+            # The pattern can vary due to perspective and noise
+            angle_match_130_1 = abs(angles[0] - 130) < 12
+            angle_match_90 = abs(angles[1] - 90) < 12
+            angle_match_130_2 = abs(angles[2] - 130) < 12
+
+            # Check if gaps are reasonable (at least 2 out of 3 should be good)
+            good_gaps = sum(1 for g in gaps if g < self.CORNER_GAP_MAX)
+
+            if angle_match_130_1 and angle_match_90 and angle_match_130_2 and good_gaps >= 2:
+                self.get_logger().info(
+                    f'✓ Triangle detected (4 lines, angles={[f"{a:.1f}" for a in angles]}°, '
+                    f'gaps={[f"{g:.3f}" for g in gaps]}m, {good_gaps}/3 gaps good)'
+                )
                 return 'Triangle'
+            else:
+                self.get_logger().debug(
+                    f'4-line rejected: angle_match=[{angle_match_130_1},{angle_match_90},{angle_match_130_2}], '
+                    f'good_gaps={good_gaps}/3'
+                )
 
+        self.get_logger().debug(f'{num_lines} lines did not match any shape pattern')
         return None
 
     def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float) -> Optional[int]:
@@ -375,18 +544,64 @@ class HoughLineDetector(Node):
         self.get_logger().warn(f"Could not assign plant_id - robot at ({robot_x:.3f}, {robot_y:.3f}) in Lane {current_lane}")
         return None
 
+    def apply_safety_offset(self, local_pos: np.ndarray) -> np.ndarray:
+        """Apply safety offset to shape position to prevent collision
+
+        Shifts the goal position toward the robot's centerline by SAFETY_OFFSET_Y
+        - If shape is on left (negative y), add positive offset (move right toward robot)
+        - If shape is on right (positive y), add negative offset (move left toward robot)
+        """
+        offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y if local_pos[1] != 0 else 0.0
+        adjusted_pos = np.array([local_pos[0], local_pos[1] + offset_y])
+
+        self.get_logger().debug(
+            f'Safety offset applied: ({local_pos[0]:.3f}, {local_pos[1]:.3f}) -> '
+            f'({adjusted_pos[0]:.3f}, {adjusted_pos[1]:.3f}) [offset_y={offset_y:.3f}m]'
+        )
+
+        return adjusted_pos
+
     def local_to_world(self, local_pos: np.ndarray, robot_x: float = None,
-                      robot_y: float = None, robot_yaw: float = None) -> np.ndarray:
-        """Convert local robot frame coordinates to world coordinates"""
+                      robot_y: float = None, robot_yaw: float = None,
+                      apply_safety: bool = False) -> np.ndarray:
+        """Convert local laser frame coordinates to world coordinates
+
+        Steps:
+        1. local_pos is in laser scanner frame
+        2. Optionally apply safety offset
+        3. Add laser offset to get position in base_link frame
+        4. Rotate and translate to get world frame position
+        """
         robot_x = robot_x if robot_x is not None else self.position_x
         robot_y = robot_y if robot_y is not None else self.position_y
         robot_yaw = robot_yaw if robot_yaw is not None else self.yaw
 
+        # Make a copy to avoid mutating the original
+        local_pos = np.copy(local_pos)
+
+        # Apply safety offset if requested (for navigation goals)
+        if apply_safety:
+            local_pos = self.apply_safety_offset(local_pos)
+
+        # Step 1: Transform from laser frame to base_link frame
+        # Add the laser offset (laser is ahead/to-side of base_link)
+        base_link_x = local_pos[0] + self.laser_offset_x
+        base_link_y = local_pos[1] + self.laser_offset_y
+
+        # Step 2: Transform from base_link frame to world frame
         cos_yaw = math.cos(robot_yaw)
         sin_yaw = math.sin(robot_yaw)
 
-        world_x = robot_x + (local_pos[0] * cos_yaw - local_pos[1] * sin_yaw)
-        world_y = robot_y + (local_pos[0] * sin_yaw + local_pos[1] * cos_yaw)
+        world_x = robot_x + (base_link_x * cos_yaw - base_link_y * sin_yaw)
+        world_y = robot_y + (base_link_x * sin_yaw + base_link_y * cos_yaw)
+
+        self.get_logger().debug(
+            f'Transform: laser({local_pos[0]:.3f}, {local_pos[1]:.3f}) -> '
+            f'base_link({base_link_x:.3f}, {base_link_y:.3f}) -> '
+            f'world({world_x:.3f}, {world_y:.3f}) | '
+            f'robot@({robot_x:.3f}, {robot_y:.3f}, yaw={math.degrees(robot_yaw):.1f}°) | '
+            f'laser_offset=({self.laser_offset_x:.3f}, {self.laser_offset_y:.3f})'
+        )
 
         return np.array([world_x, world_y])
 
@@ -592,6 +807,11 @@ class HoughLineDetector(Node):
         if len(lines) <= 1:
             return lines
 
+        # Filter out noise - lines shorter than 3cm
+        lines = [l for l in lines if l['length'] >= self.min_valid_line_length]
+        if len(lines) <= 1:
+            return lines
+
         # Merge collinear lines
         merged = []
         used = set()
@@ -757,6 +977,100 @@ class HoughLineDetector(Node):
         return ordered
 
     # ========================================================================
+    # RVIZ MARKER PUBLISHING
+    # ========================================================================
+
+    def publish_shape_markers(self):
+        """Publish RViz markers for all detected shapes"""
+        marker_array = MarkerArray()
+
+        for idx, detection in enumerate(self.detected_shapes):
+            # Create a marker for the shape
+            marker = Marker()
+            marker.header.frame_id = "odom"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "detected_shapes"
+            marker.id = idx
+            marker.type = Marker.CYLINDER
+            marker.action = Marker.ADD
+
+            # Set position (use stored goal position)
+            marker.pose.position.x = float(detection.goal_position[0])
+            marker.pose.position.y = float(detection.goal_position[1])
+            marker.pose.position.z = 0.1  # Slightly above ground
+
+            # Set orientation (upright)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+
+            # Set scale based on shape type
+            marker.scale.x = 0.15  # diameter
+            marker.scale.y = 0.15
+            marker.scale.z = 0.2   # height
+
+            # Set color based on shape type
+            if detection.shape_type == "Triangle":
+                marker.color.r = 1.0
+                marker.color.g = 1.0
+                marker.color.b = 0.0  # Yellow
+                marker.color.a = 0.8
+            elif detection.shape_type == "Square":
+                marker.color.r = 1.0
+                marker.color.g = 0.0
+                marker.color.b = 0.0  # Red
+                marker.color.a = 0.8
+            elif detection.shape_type == "Pentagon":
+                marker.color.r = 0.0
+                marker.color.g = 0.0
+                marker.color.b = 1.0  # Blue
+                marker.color.a = 0.8
+            else:
+                marker.color.r = 0.5
+                marker.color.g = 0.5
+                marker.color.b = 0.5  # Gray
+                marker.color.a = 0.8
+
+            marker.lifetime.sec = 0  # 0 means forever
+
+            marker_array.markers.append(marker)
+
+            # Add text label with plant ID
+            text_marker = Marker()
+            text_marker.header.frame_id = "odom"
+            text_marker.header.stamp = self.get_clock().now().to_msg()
+            text_marker.ns = "shape_labels"
+            text_marker.id = idx + 1000  # Offset to avoid ID collision
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+
+            # Position text above the marker (using goal position)
+            text_marker.pose.position.x = float(detection.goal_position[0])
+            text_marker.pose.position.y = float(detection.goal_position[1])
+            text_marker.pose.position.z = 0.4
+
+            text_marker.pose.orientation.w = 1.0
+
+            # Set text
+            plant_id_str = str(detection.plant_id) if detection.plant_id is not None else "?"
+            text_marker.text = f"{detection.shape_type}\nID: {plant_id_str}"
+
+            text_marker.scale.z = 0.12  # Text height
+
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.color.a = 1.0
+
+            text_marker.lifetime.sec = 0
+
+            marker_array.markers.append(text_marker)
+
+        # Publish the marker array
+        self.marker_pub.publish(marker_array)
+
+    # ========================================================================
     # VISUALIZATION
     # ========================================================================
 
@@ -779,16 +1093,26 @@ class HoughLineDetector(Node):
         colors = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
         for i, line in enumerate(lines):
             color = colors[i % len(colors)]
+            # Draw line
             self.ax2.plot([line['start'][0], line['end'][0]],
                          [line['start'][1], line['end'][1]],
                          color=color, linewidth=4, alpha=0.9,
                          label=f'L{i+1}: {line["length"]:.2f}m')
+            # Draw endpoints
+            self.ax2.scatter([line['start'][0], line['end'][0]],
+                           [line['start'][1], line['end'][1]],
+                           c=color, s=80, marker='o', edgecolors='black', linewidths=1, zorder=5)
+            # Label endpoints
+            self.ax2.text(line['start'][0], line['start'][1], f'{i}s', fontsize=8, color='white',
+                         ha='center', va='center', weight='bold', zorder=6)
+            self.ax2.text(line['end'][0], line['end'][1], f'{i}e', fontsize=8, color='white',
+                         ha='center', va='center', weight='bold', zorder=6)
 
         if shape_position is not None:
             self.ax2.scatter(shape_position[0], shape_position[1],
                            c='red', s=200, marker='X',
                            edgecolors='black', linewidths=2,
-                           label=f'Shape Center ({shape_position[0]:.2f}, {shape_position[1]:.2f})',
+                           label=f'Position ({shape_position[0]:.2f}, {shape_position[1]:.2f})',
                            zorder=10)
 
         self.ax2.set_xlim(-0.5, 2.5)

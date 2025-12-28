@@ -27,7 +27,8 @@ install(PROGRAMS
     src/Task2B_aruco_perception.py
     src/Task2B_bad_fruit_perception.py
     src/Task3A_fruits_fert_tfs.py
-    src/ebot_nav_task3b.py
+    src/ebot_dwa.py
+    src/ebot_nav.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS

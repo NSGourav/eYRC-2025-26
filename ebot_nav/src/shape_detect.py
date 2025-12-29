@@ -103,7 +103,6 @@ class HoughLineDetector(Node):
 
         # Detection flow control
         self.detection_paused = False
-        self.pending_intermediate_goal = False
 
         # ROS2 parameters
         self.declare_parameter('enable_visualization', True)
@@ -118,9 +117,7 @@ class HoughLineDetector(Node):
         # ROS2 communication
         self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
         self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
-        self.create_subscription(String, "/intermediate_goal_response", self.goal_response_callback, 10)
         self.shape_pub = self.create_publisher(String, '/detection_status', 10)
-        self.intermediate_goal_pub = self.create_publisher(String, '/set_intermediate_goal', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
         self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10)  # Priority navigation
 
@@ -145,34 +142,6 @@ class HoughLineDetector(Node):
         siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
         cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
         self.yaw = math.atan2(siny_cosp, cosy_cosp)
-
-    def goal_response_callback(self, msg: String):
-        """Handle responses from navigation intermediate goal"""
-        self.get_logger().info(f"Navigation response: {msg.data}")
-
-        if msg.data.startswith("SUCCESS") and self.pending_intermediate_goal:
-            self.detection_paused = True
-            self.pending_intermediate_goal = False
-            self.get_logger().info("Detection PAUSED - Robot navigating to intermediate goal")
-
-        elif msg.data.startswith("COMPLETED"):
-            self.detection_paused = False
-            self.get_logger().info("Detection RESUMED - Intermediate goal reached")
-
-            # Publish shape status when goal is completed
-            if self.pending_shape is not None:
-                shape_status, plant_id = self.pending_shape
-                status_msg = String()
-                status_msg.data = f"{shape_status},{self.position_x:.2f},{self.position_y:.2f},{plant_id}"
-                self.shape_pub.publish(status_msg)
-                self.get_logger().info(f"Published shape status: {shape_status} at ({self.position_x:.2f}, {self.position_y:.2f})")
-                self.pending_shape = None
-
-        elif msg.data.startswith("ERROR"):
-            self.detection_paused = False
-            self.pending_intermediate_goal = False
-            self.pending_shape = None
-            self.get_logger().warn(f"Goal failed - Detection RESUMED: {msg.data}")
 
     def scan_callback(self, msg: LaserScan):
         """Main callback for laser scan processing"""
@@ -288,7 +257,6 @@ class HoughLineDetector(Node):
                         self.get_logger().info(f"Published shape pose: {pose_msg.data}")
 
                         self.pending_shape = (shape_status, plant_id)
-                        self.send_intermediate_goal(goal_world_pos, shape_type)
                     else:
                         self.get_logger().info(f"{shape_type} detected (dock station - no intermediate goal)")
 
@@ -620,32 +588,6 @@ class HoughLineDetector(Node):
         )
 
         return np.array([world_x, world_y])
-
-    def send_intermediate_goal(self, world_position: np.ndarray, shape_type: str):
-        """Send intermediate goal to navigation node"""
-        try:
-            if world_position is None or len(world_position) < 2:
-                self.get_logger().error("Invalid world position")
-                return
-
-            goal_x = float(world_position[0])
-            goal_y = float(world_position[1])
-
-            if not math.isfinite(goal_x) or not math.isfinite(goal_y):
-                self.get_logger().error("Goal position is invalid (inf/nan)")
-                return
-
-            goal_msg = String()
-            goal_msg.data = f"{goal_x:.3f},{goal_y:.3f}"
-            self.intermediate_goal_pub.publish(goal_msg)
-
-            self.pending_intermediate_goal = True
-            self.get_logger().info(f"Sending robot to investigate {shape_type} at ({goal_x:.2f}, {goal_y:.2f})")
-
-        except Exception as e:
-            self.get_logger().error(f"Failed to send intermediate goal: {str(e)}")
-            self.pending_intermediate_goal = False
-            self.pending_shape = None
 
     def compute_corner(self, line1: Dict, line2: Dict) -> np.ndarray:
         """Compute intersection point (corner) of two connected lines"""

@@ -25,23 +25,25 @@ class EbotNav(Node):
         #     (0.3,-2.0, 1.57),
         #     (0.3,-1.0, 1.57)]
         # only for sim use
-        self.waypoints = [
-            (0.3,-5.0, 1.57),
-            (0.53, -1.95, 1.57),            # P1: (x1, y1, yaw1)
-            (0.26, 1.1, 1.57),
-            (-1.53, 1.1, -1.57),
-            (-1.53, -5.52, -1.57),
-            (-3.56, -5.52, +1.57),
-            (-3.56, 1.1, +1.57),         # P2: (x2, y2, yaw2)
-            (-1.53, -6.61, -1.57)           # P3: (x3, y3, yaw3)
-        ]
-        #Hardware <PLZ verifyyyy>
-        # self.waypoints=  [5.035, -1.857, 1.57],           # 1st lane end
-            # [4.495, 0.006, -1.57],           # 2nd lane start
-            # [1.448, 0.072, -1.57],           # 2nd lane end
-            # [1.108, 1.656, 1.57],            # 3rd lane start
-            # [5.379, 1.955, 1.57],            # 3rd lane end
-            # [0.0, 0.0, -1.57]               # Home
+        # self.waypoints = [
+        #     (0.3,-5.5, 1.57),
+        #     (0.53, -1.95, 1.57),            # P1: (x1, y1, yaw1)
+        #     (0.26, 1.1, 1.57),
+        #     (-1.53, 1.1, -1.57),
+        #     (-1.53, -5.52, -1.57),
+        #     (-3.56, -5.52, +1.57),
+        #     (-3.56, 1.1, +1.57),         # P2: (x2, y2, yaw2)
+        #     (-1.53, -6.61, -1.57)           # P3: (x3, y3, yaw3)
+        # ]
+        self.waypoints=  [
+            (1.03, -1.857, 1.57),           # 1st lane start
+            (2.072, -1.704, 1.57),           # Dock station
+            (5.035, -1.857, 1.57),           # 1st lane end
+            (4.495, 0.006, -1.57),           # 2nd lane start
+            (1.448, 0.072, -1.57),           # 2nd lane end
+            (1.108, 1.656, 1.57),            # 3rd lane start
+            (5.379, 1.955, 1.57),            # 3rd lane end
+            (0.0, 0.0, -1.57)]               # Home
         self.i = 0
 
         # Priority navigation state
@@ -122,6 +124,10 @@ class EbotNav(Node):
             if self.priority_goal is not None:
                 shape_type, x, y = self.priority_goal
                 self.get_logger().info(f"Reached PRIORITY goal: {shape_type} at ({x:.3f}, {y:.3f})")
+                if shape_type == "Square":
+                    self.publish_dock_status("BAD_HEALTH",0)
+                if shape_type == "Triangle":
+                    self.publish_dock_status("FERTILIZER_REQUIRED",0)
 
                 # Clear priority goal
                 self.priority_goal = None
@@ -138,13 +144,13 @@ class EbotNav(Node):
             else:
                 # Normal waypoint reached
                 if self.i==2:
-                    self.publish_dock_status()
+                    self.publish_dock_status("DOCK_STATION",0)
                     time.sleep(2)
                 self.publish_next_waypoint()
 
-    def publish_dock_status(self):
+    def publish_dock_status(self,shape_status,plant_id):
             status_msg = String()
-            status_msg.data = f"DOCK_STATION,{self.current_x},{self.current_y},0"
+            status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
             time.sleep(0.1)
 
@@ -162,6 +168,7 @@ def main(args=None):
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+    
 
 if __name__ == '__main__':
     main()

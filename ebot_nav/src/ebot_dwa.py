@@ -519,9 +519,19 @@ def main(args=None):
     robot_controller = ebotNav3B()
     executor = MultiThreadedExecutor()
     executor.add_node(robot_controller)
-    executor.spin()
-    robot_controller.destroy_node()
-    rclpy.shutdown()
+    try:
+        executor.spin()
+
+    except KeyboardInterrupt:
+        robot_controller.get_logger().warn(
+            'Keyboard interrupt received, stopping robot...'
+        )
+        robot_controller.stop_robot()
+
+    finally:
+        executor.shutdown()
+        robot_controller.destroy_node()
+        rclpy.shutdown()
 
 if __name__=='__main__':
     main()

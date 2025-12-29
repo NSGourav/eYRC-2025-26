@@ -36,7 +36,7 @@ class EbotNav(Node):
         #     (-1.53, -6.61, -1.57)           # P3: (x3, y3, yaw3)
         # ]
         self.waypoints=  [
-            (0.0, 0.0, 1.57),
+            (0.0, 0.0, -1.57),
             (0.7, -1.857, 0.0),           # 1st lane start
             (2.072, -1.704, 0.0),           # Dock station
             (5.035, -1.857, 0.0),           # 1st lane end

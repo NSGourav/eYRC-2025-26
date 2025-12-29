@@ -53,7 +53,7 @@ class HoughLineDetector(Node):
     MAX_PENTAGON_SQUARE_LENGTH = 0.35
 
     # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y = 0.20  # 20cm offset in y-direction (perpendicular to robot's approach)
+    SAFETY_OFFSET_Y = 0.30  # 20cm offset in y-direction (perpendicular to robot's approach)
     SAFETY_OFFSET_X_SQUARE = 0.10  # 10cm offset in x-direction for Square (push away from robot)
 
     def __init__(self):
@@ -105,7 +105,7 @@ class HoughLineDetector(Node):
         self.detection_paused = False
 
         # ROS2 parameters
-        self.declare_parameter('enable_visualization', True)
+        self.declare_parameter('enable_visualization', False)
         self.declare_parameter('debug_mode', False)
         self.enable_visualization = self.get_parameter('enable_visualization').value
         self.debug_mode = self.get_parameter('debug_mode').value
@@ -250,7 +250,7 @@ class HoughLineDetector(Node):
                         )
 
                     # Publish shape pose for priority navigation (Square and Triangle only)
-                    if shape_type in ['Square', 'Triangle']:
+                    if shape_type in ['Square']:
                         pose_msg = String()
                         pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f}"
                         self.shape_pose_pub.publish(pose_msg)
@@ -375,7 +375,7 @@ class HoughLineDetector(Node):
             gap_ok = dist < self.CORNER_GAP_MAX
             length_ok = (lines[0]['length'] < self.MAX_TRIANGLE_LENGTH and
                         lines[1]['length'] < self.MAX_TRIANGLE_LENGTH and
-                        lines[0]['length'] > 0.10 and lines[1]['length'] > 0.07)  
+                        lines[0]['length'] > 0.10 and lines[1]['length'] > 0.07)
             ratio = max(lines[0]['length'], lines[1]['length']) / max(min(lines[0]['length'], lines[1]['length']), 0.01)
             ratio_ok = ratio < 3.0  # Lines shouldn't differ by more than 3x
 

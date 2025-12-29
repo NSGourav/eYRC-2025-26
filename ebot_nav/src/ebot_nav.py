@@ -36,13 +36,14 @@ class EbotNav(Node):
         #     (-1.53, -6.61, -1.57)           # P3: (x3, y3, yaw3)
         # ]
         self.waypoints=  [
-            (1.03, -1.857, 1.57),           # 1st lane start
-            (2.072, -1.704, 1.57),           # Dock station
-            (5.035, -1.857, 1.57),           # 1st lane end
-            (4.495, 0.006, -1.57),           # 2nd lane start
-            (1.448, 0.072, -1.57),           # 2nd lane end
-            (1.108, 1.656, 1.57),            # 3rd lane start
-            (5.379, 1.955, 1.57),            # 3rd lane end
+            (0.0, 0.0, 1.57),
+            (0.7, -1.857, 0.0),           # 1st lane start
+            (2.072, -1.704, 0.0),           # Dock station
+            (5.035, -1.857, 0.0),           # 1st lane end
+            (4.495, 0.006, 3.14),           # 2nd lane start
+            (1.448, 0.072, 3.14),           # 2nd lane end
+            (1.108, 1.656, 0.0),            # 3rd lane start
+            (5.0, 1.955, 0.0),            # 3rd lane end
             (0.0, 0.0, -1.57)]               # Home
         self.i = 0
 
@@ -63,7 +64,7 @@ class EbotNav(Node):
         siny_cosp = 2 * (orientation_q.w * orientation_q.z + orientation_q.x * orientation_q.y)
         cosy_cosp = 1 - 2 * (orientation_q.y * orientation_q.y + orientation_q.z * orientation_q.z)
         self.current_yaw = math.atan2(siny_cosp, cosy_cosp)
-        
+
     def publish_next_waypoint(self):
         if self.waypoints and self.i < len(self.waypoints):
             next_wp = self.waypoints[self.i]
@@ -101,12 +102,12 @@ class EbotNav(Node):
             self.priority_goal = (shape_type, x, y)
 
             # Choose yaw (1.57 or -1.57) based on which is closer to current yaw
-            target_yaw = 1.57  # Default
+            target_yaw = 0.0  # Default
             if self.current_yaw is not None:
                 # Calculate angular differences
-                diff_1_57 = abs(self._normalize_angle(self.current_yaw - 1.57))
-                diff_neg_1_57 = abs(self._normalize_angle(self.current_yaw - (-1.57)))
-                target_yaw = 1.57 if diff_1_57 < diff_neg_1_57 else -1.57
+                diff_1_57 = abs(self._normalize_angle(self.current_yaw - 0))
+                diff_neg_1_57 = abs(self._normalize_angle(self.current_yaw - (3.14)))
+                target_yaw = 0.0 if diff_1_57 < diff_neg_1_57 else 3.14
                 self.get_logger().info(f"Current yaw: {self.current_yaw:.3f}, choosing target yaw: {target_yaw:.3f}")
 
             # Immediately publish priority goal
@@ -125,7 +126,8 @@ class EbotNav(Node):
                 shape_type, x, y = self.priority_goal
                 self.get_logger().info(f"Reached PRIORITY goal: {shape_type} at ({x:.3f}, {y:.3f})")
                 if shape_type == "Square":
-                    self.publish_dock_status("BAD_HEALTH",0)
+                    self.publish_dock_status("BAD_HEALTH",4)
+                    time.sleep(10)
                 if shape_type == "Triangle":
                     self.publish_dock_status("FERTILIZER_REQUIRED",0)
 
@@ -152,6 +154,7 @@ class EbotNav(Node):
             status_msg = String()
             status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
+            self.get_logger().info(f"<<<<Published SHAPE>>>>")
             time.sleep(0.1)
 
     def _normalize_angle(self, angle):
@@ -161,14 +164,14 @@ class EbotNav(Node):
         while angle < -math.pi:
             angle += 2 * math.pi
         return angle
-            
+
 def main(args=None):
     rclpy.init(args=args)
     node = EbotNav()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-    
+
 
 if __name__ == '__main__':
     main()

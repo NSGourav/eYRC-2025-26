@@ -19,7 +19,7 @@ ALPHA = 2.4                # for more heading towards goal (increased)
 BETA = 1.2                  # for clearance (increased to avoid tight spaces)
 GAMMA = 1.8                 # for faster speeds (increased)
 DELTA = 2.5                 # for reducing distance to current waypoint (significantly increased)
-EPSILON = 0.2               # for penalizing rotation (reduced from 0.8 to allow more rotation)
+EPSILON = 0.18               # for penalizing rotation (reduced from 0.8 to allow more rotation)
 ZETA = 0.3                  # for smoothness (prefer velocities close to current)
 
 DEL_T = 1.75                # Reduced from 2.0 for faster computation
@@ -84,7 +84,7 @@ class ebotNav3B(Node):
         self.yaw_pid = PID(ykp, yki, ykd, out_min=-2.5, out_max=2.5)  # Updated to match W_MAX
 
         self.target_cycle_count = 0
-        
+
         self.prev_cmd = Twist()
 
         self.bot_radius = 0.25; self.safety_margin = 0.15
@@ -94,10 +94,10 @@ class ebotNav3B(Node):
         self.min_lidar_angle= -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
         self.max_lidar_angle= 70.0 * pi / 180.0
 
-        self.V_MIN, self.V_MAX = 0.0, 1.0
-        self.W_MIN, self.W_MAX = -1.5, 1.5        # Increased from ±1.5 to allow faster rotation
+        self.V_MIN, self.V_MAX = 0.0, 0.4
+        self.W_MIN, self.W_MAX = -1.8, 1.8        # Increased from ±1.5 to allow faster rotation
         self.A_MIN, self.A_MAX = -1.0, 1.0
-        self.AL_MIN, self.AL_MAX = -0.75, 0.75      # Increased from ±0.2 for quicker rotation changes
+        self.AL_MIN, self.AL_MAX = 1.0, 1.0      # Increased from ±0.2 for quicker rotation changes
 
         self.max_clearance_norm = 3.0
         self.lookahead_index = 3
@@ -140,14 +140,14 @@ class ebotNav3B(Node):
 
         x = float(parts[0].strip())
         y = float(parts[1].strip())
-        yaw = float(parts[2].strip())  
-        self.waypoints = [x, y, yaw]          
+        yaw = float(parts[2].strip())
+        self.waypoints = [x, y, yaw]
         self.flag_pose=False
         self.flag_ori=False
         self.get_logger().info(f"Goal pose: ({self.waypoints[0]:.2f},{self.waypoints[1]:.2f},{self.waypoints[2]:.2f})")
-        time.sleep(1) 
+        time.sleep(1)
 
-  
+
     def scan_callback(self,msg:LaserScan):
         pts= []
         angle = msg.angle_min
@@ -167,17 +167,17 @@ class ebotNav3B(Node):
             self.get_logger().info("No waypoints set. Robot is idle.")
             self.stop_robot()
             return
-        
+
         if (self.flag_pose==True) and (self.flag_ori==True):
             self.stop_robot()
             return
         # else:
 
-        
+
         x_goal, y_goal, yaw_goal = self.waypoints
         dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
         goal_reached = dist_to_goal < self.target_thresh
-        
+
         if goal_reached and self.flag_pose==False:
             self.flag_pose=True
 
@@ -199,12 +199,12 @@ class ebotNav3B(Node):
                 msg=Bool()
                 msg.data=True
                 self.nav_pub.publish(msg)
-                self.stop_robot()                
+                self.stop_robot()
                 return
 
         if self.flag_pose==True or self.flag_ori==True:
             return
-        
+
         dist_to_goal = hypot(self.current_x - x_goal, self.current_y - y_goal)
 
         v_dwa, w_dwa, all_trajs, best_traj, info = self.dwa_modified(x_goal, y_goal, dist_to_goal)

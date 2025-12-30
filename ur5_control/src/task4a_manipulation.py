@@ -64,17 +64,17 @@ class ArmController(Node):
         # Error tolerance
         self.pos_tol = 0.05  # Position tolerance
         self.ori_tol = 0.1  # Orientation tolerance
-        self.omega_limit=0.7
-        self.v_max=0.1
+        self.omega_limit=0.5
+        self.v_max=0.15
         self.v_min = 0.015
 
         # Control loop parameters
 
-        self.kp_position=0.3
+        self.kp_position=0.7
         self.kd_position=0.1
         self.prev_error_pos=[0.0,0.0,0.0]
 
-        self.kp_orientation=1.0
+        self.kp_orientation=1.4
         self.kd_orientation=0.1
         self.prev_error_orientation=[0.0,0.0,0.0]
 

@@ -116,7 +116,7 @@ class FruitsTF(Node):
             cv2.drawContours(inner_mask, [cnt], -1, 255, -1)
 
             # Create ring (doughnut shape) around fruit
-            kernel = np.ones((20, 20), np.uint8)  # Adjust for ring thickness
+            kernel = np.ones((30, 30), np.uint8)  # Adjust for ring thickness
             outer_mask = cv2.dilate(inner_mask, kernel, iterations=1)
             ring_mask = cv2.subtract(outer_mask, inner_mask)
 
@@ -129,7 +129,7 @@ class FruitsTF(Node):
 
             # STEP 5: Lower threshold for semi-ring detection
             # Even a small amount of grey on the edge = bad fruit
-            GREY_THRESHOLD = 15.0  # Lower threshold (5-10%) to catch partial grey edges
+            GREY_THRESHOLD = 12.0  # Lower threshold (5-10%) to catch partial grey edges
 
             if grey_percentage < GREY_THRESHOLD:
                 continue

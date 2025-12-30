@@ -129,7 +129,7 @@ class FruitsTF(Node):
 
             # STEP 5: Lower threshold for semi-ring detection
             # Even a small amount of grey on the edge = bad fruit
-            GREY_THRESHOLD = 8.0  # Lower threshold (5-10%) to catch partial grey edges
+            GREY_THRESHOLD = 15.0  # Lower threshold (5-10%) to catch partial grey edges
 
             if grey_percentage < GREY_THRESHOLD:
                 continue
@@ -209,7 +209,7 @@ class FruitsTF(Node):
                 t_cam = TransformStamped()
                 t_cam.header.stamp = self.get_clock().now().to_msg()
                 t_cam.header.frame_id = 'camera_link'
-                t_cam.child_frame_id = f'cam_{fruit_id}'
+                t_cam.child_frame_id = f'cam_fruit_{fruit_id}'
                 t_cam.transform.translation.x = z
                 t_cam.transform.translation.y = x
                 t_cam.transform.translation.z = y

@@ -62,8 +62,8 @@ class ArmController(Node):
         self.home_location=[]
 
         # Error tolerance
-        self.pos_tol = 0.1  # Position tolerance
-        self.ori_tol = 0.2  # Orientation tolerance
+        self.pos_tol = 0.05  # Position tolerance
+        self.ori_tol = 0.1  # Orientation tolerance
         self.omega_limit=0.7
         self.v_max=0.1
         self.v_min = 0.015
@@ -74,7 +74,7 @@ class ArmController(Node):
         self.kd_position=0.1
         self.prev_error_pos=[0.0,0.0,0.0]
 
-        self.kp_orientation=0.7
+        self.kp_orientation=1.0
         self.kd_orientation=0.1
         self.prev_error_orientation=[0.0,0.0,0.0]
 
@@ -115,7 +115,6 @@ class ArmController(Node):
         twist_msg.twist.angular.x = ang_base[0]
         twist_msg.twist.angular.y = ang_base[1]
         twist_msg.twist.angular.z = ang_base[2]
-        print(twist_msg)
         self.cmd_pub.publish(twist_msg)
 
     def force_callback(self, msg):
@@ -272,7 +271,7 @@ class ArmController(Node):
                     twist_cmd.twist.angular.x = omega_body[0]
                     twist_cmd.twist.angular.y = omega_body[1]
                     twist_cmd.twist.angular.z = omega_body[2]
-                    # self.get_logger().info(err_ori)
+                    print(err_ori)
 
                 elif ori_flag == False:
                     ori_flag = True
@@ -340,7 +339,7 @@ class ArmController(Node):
         self.goal_pose_nav(self.fertiliser_pose)
         self.flag_force=True
         self.control_magnet(True)
-        self.fertiliser_pose[1]=self.fertiliser_pose[1]-0.25
+        self.fertiliser_pose[1]=self.fertiliser_pose[1]-0.3
         self.goal_pose_nav(self.fertiliser_pose)
 
         self.ebot_pose[2]=self.ebot_pose[2]+0.2

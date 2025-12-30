@@ -38,7 +38,7 @@ class ArmController(Node):
         self.cmd_pub = self.create_publisher(TwistStamped, "/delta_twist_cmds", 10)
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group=MutuallyExclusiveCallbackGroup()
-        
+
         # Subscriber: get current end-effector pose
         self.sub = self.create_subscription(Float64MultiArray, '/tcp_pose_raw', self.pose_callback, 10,callback_group=self.callback_group)
         self.rate = self.create_rate(1.2, self.get_clock())
@@ -49,7 +49,7 @@ class ArmController(Node):
         self.flag_force = False
 
         self.current_position = None
-        self.current_orientation = None 
+        self.current_orientation = None
         self.current_rotation_matrix = None
 
         self.fertiliser_pick = self.create_timer(0.5,self.control_loop,callback_group=self.fruit_cb_group)
@@ -62,19 +62,19 @@ class ArmController(Node):
         self.home_location=[]
 
         # Error tolerance
-        self.pos_tol = 0.02  # Position tolerance
-        self.ori_tol = 0.01  # Orientation tolerance
-        self.omega_limit=1.0
+        self.pos_tol = 0.1  # Position tolerance
+        self.ori_tol = 0.2  # Orientation tolerance
+        self.omega_limit=0.7
         self.v_max=0.1
         self.v_min = 0.015
-        
+
         # Control loop parameters
 
-        self.kp_position=1.5
+        self.kp_position=0.3
         self.kd_position=0.1
         self.prev_error_pos=[0.0,0.0,0.0]
 
-        self.kp_orientation=3.0
+        self.kp_orientation=0.7
         self.kd_orientation=0.1
         self.prev_error_orientation=[0.0,0.0,0.0]
 
@@ -88,12 +88,12 @@ class ArmController(Node):
     def arm_vel_publish(self,twist_cmd):
 
         twist_ee = np.array([
-        twist_cmd.linear.x,
-        twist_cmd.linear.y,
-        twist_cmd.linear.z,
-        twist_cmd.angular.x,
-        twist_cmd.angular.y,
-        twist_cmd.angular.z
+        twist_cmd.twist.linear.x,
+        twist_cmd.twist.linear.y,
+        twist_cmd.twist.linear.z,
+        twist_cmd.twist.angular.x,
+        twist_cmd.twist.angular.y,
+        twist_cmd.twist.angular.z
         ])
 
         ee_matrix = self.current_rotation_matrix  # 4×4 transform
@@ -115,7 +115,7 @@ class ArmController(Node):
         twist_msg.twist.angular.x = ang_base[0]
         twist_msg.twist.angular.y = ang_base[1]
         twist_msg.twist.angular.z = ang_base[2]
-
+        print(twist_msg)
         self.cmd_pub.publish(twist_msg)
 
     def force_callback(self, msg):
@@ -131,7 +131,7 @@ class ArmController(Node):
         request.data = state  # True to activate, False to deactivate
         future = self.magnet_client.call_async(request)
         return future
-    
+
     def lookup_tf(self, frame_id, timeout_sec=2.0):
         start = self.get_clock().now()
         while (self.get_clock().now() - start).nanoseconds < timeout_sec * 1e9:
@@ -157,7 +157,7 @@ class ArmController(Node):
 
         self.get_logger().error(f'Timeout waiting for TF: {frame_id}')
         return None
-    
+
     def bad_fruit_callback(self):
         if self.flag_fruit == 1:
             pass
@@ -204,11 +204,11 @@ class ArmController(Node):
 
             fruit_pose[2] += 0.1
             self.goal_pose_nav(fruit_pose)
-            
+
             self.flag_force=True
             fruit_pose[2] -= 0.08
             self.goal_pose_nav(fruit_pose)
-      
+
             self.control_magnet(True)
             fruit_pose[2] += 0.10
             self.goal_pose_nav(fruit_pose)
@@ -220,9 +220,10 @@ class ArmController(Node):
         self.goal_pose_nav(home_pose)
         self.flag_fruit=2
         self.stop_arm()
-    
+
     def stop_arm(self):
         twist_cmd = TwistStamped()
+
         self.arm_vel_publish(twist_cmd)
 
     def goal_pose_nav(self,target_loc):
@@ -239,7 +240,7 @@ class ArmController(Node):
 
 
         while rclpy.ok():
-            try:                
+            try:
                 rot_matrix_4x4 = tf_transformations.quaternion_matrix(self.current_orientation)
                 self.current_rotation_matrix = rot_matrix_4x4[:3, :3]
 
@@ -271,26 +272,31 @@ class ArmController(Node):
                     twist_cmd.twist.angular.x = omega_body[0]
                     twist_cmd.twist.angular.y = omega_body[1]
                     twist_cmd.twist.angular.z = omega_body[2]
+                    # self.get_logger().info(err_ori)
 
                 elif ori_flag == False:
                     ori_flag = True
+                    print("Ori done")
 
-                if (norm_ep>self.pos_tol and pose_flag==0): 
+
+                if (norm_ep>self.pos_tol and pose_flag==0):
                     twist_cmd.twist.linear.x = v_ee[0]
                     twist_cmd.twist.linear.y = v_ee[1]
                     twist_cmd.twist.linear.z = v_ee[2]
 
                 elif pose_flag==0:
                     pose_flag=True
+                    print("Pos done")
 
-                
+
+
                 self.arm_vel_publish(twist_cmd)
                 self.rate.sleep()
 
                 if pose_flag==1 and ori_flag==1:
                     self.get_logger().info(f"Goal pose reached at target: {target_loc}")
                     return True
-                
+
             except Exception as e:
                 self.get_logger().error(f"Exception in goal_pose_nav: {e}")
                 self.rate.sleep()
@@ -304,12 +310,22 @@ class ArmController(Node):
             return
 
         self.flag_target_loc=False
-
+        print("Inside loop")
         while not self.flag_target_loc:
             self.rate.sleep()
             try:
                 self.fertiliser_pose = self.lookup_tf('5076_fertilizer_1')
-                self.ebot_pose = self.lookup_tf('5076_ebot_6')
+                # self.fertiliser_pose[0]=-0.19
+                # self.fertiliser_pose[1]=-0.44
+                # self.fertiliser_pose[2]=0.64
+
+                # self.fertiliser_pose[3]=0.508
+                # self.fertiliser_pose[4]=0.45
+                # self.fertiliser_pose[5]=-0.53
+                # self.fertiliser_pose[6]=0.5
+                # # self.ebot_pose = self.lookup_tf('5076_ebot_6')
+                self.ebot_pose = [-0.8, 0.01, 0.3, 0.7, -0.7, 0.0, 0.0]
+
                 if self.fertiliser_pose and self.ebot_pose:
                     self.flag_target_loc = True
                     self.get_logger().info('TF lookup successful — poses stored')
@@ -319,12 +335,12 @@ class ArmController(Node):
 
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
-        
-        self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
+
+        self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.25
         self.goal_pose_nav(self.fertiliser_pose)
         self.flag_force=True
         self.control_magnet(True)
-        self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
+        self.fertiliser_pose[1]=self.fertiliser_pose[1]-0.25
         self.goal_pose_nav(self.fertiliser_pose)
 
         self.ebot_pose[2]=self.ebot_pose[2]+0.2
@@ -337,7 +353,7 @@ class ArmController(Node):
         self.stop_arm()
 
 
-    
+
 def main():
     rclpy.init()
     robot_controller = ArmController()

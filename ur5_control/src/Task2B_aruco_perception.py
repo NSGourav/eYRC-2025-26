@@ -184,9 +184,13 @@ class aruco_tf(Node):
 
                 # Apply camera frame rotation
                 q_rot = [0.0, -0.7068252, 0.0, 0.7068252]
+                # q_rot=[0.0,0.0,1.0,0.0]
+                # q_rot_2 = [-0.7068252, 0, 0, 0.7073883]
+                q_rot_2=[0.0,0.0,0.0,1.0]
                 r_quat = R.from_quat([qx, qy, qz, qw])
                 r_rot = R.from_quat(q_rot)
-                r_combined = r_quat * r_rot
+                r_rot_2=R.from_quat(q_rot_2)
+                r_combined = r_quat * r_rot * r_rot_2
                 q_combined = r_combined.as_quat()
 
                 # Get depth value at marker center (in millimeters)

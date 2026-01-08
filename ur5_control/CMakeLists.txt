@@ -37,6 +37,8 @@ install(PROGRAMS
 install(PROGRAMS
     src/Task4A_src/Task4A_perception.py
     src/Task4A_src/Task4A_manipulation.py
+    src/Task4A_src/manipulation.py
+    src/Task4A_src/test.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS

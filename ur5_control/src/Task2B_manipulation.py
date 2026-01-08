@@ -170,7 +170,7 @@ class MarkerFollower(Node):
             try:
                 result = self.service_future.result()
                 if result is not None:
-                    self.get_logger().info(f'✓ Successfully {self.service_type}ed fertiliser_can')
+                    self.get_logger().info(f'✓ Successfully {self.service_type}_fertiliser_can')
                     self.service_pending = False
                     self.service_future = None
                     return True # Successful

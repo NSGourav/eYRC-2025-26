@@ -49,11 +49,11 @@ class HoughLineDetector(Node):
 
     # Distance thresholds
     CORNER_GAP_MAX = 0.06  # Max gap between connected lines - increased for better detection
-    MAX_TRIANGLE_LENGTH = 0.30
+    MAX_TRIANGLE_LENGTH = 0.25
     MAX_PENTAGON_SQUARE_LENGTH = 0.35
 
     # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y = 0.30  # 20cm offset in y-direction (perpendicular to robot's approach)
+    SAFETY_OFFSET_Y = 0.25  # 20cm offset in y-direction (perpendicular to robot's approach)
     SAFETY_OFFSET_X_SQUARE = 0.10  # 10cm offset in x-direction for Square (push away from robot)
 
     def __init__(self):
@@ -69,10 +69,10 @@ class HoughLineDetector(Node):
         self.theta_resolution = np.pi / 360
         self.hough_threshold = 12
         self.min_line_length = 0.08
-        self.max_line_gap = 0.05  # Increased to 5cm to merge broken segments
+        self.max_line_gap = 0.08  # Increased to 5cm to merge broken segments
 
         # Minimum line length to filter noise (3cm)
-        self.min_valid_line_length = 0.03
+        self.min_valid_line_length = 0.02
 
         # Image conversion
         self.pixels_per_meter = 300
@@ -250,7 +250,7 @@ class HoughLineDetector(Node):
                         )
 
                     # Publish shape pose for priority navigation (Square and Triangle only)
-                    if shape_type in ['Square']:
+                    if shape_type in ['Square', 'Triangle']:
                         pose_msg = String()
                         pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f}"
                         self.shape_pose_pub.publish(pose_msg)
@@ -359,39 +359,7 @@ class HoughLineDetector(Node):
         num_lines = len(lines)
         self.get_logger().debug(f'Analyzing {num_lines} lines for shape detection')
 
-        # 2-line Triangle detection (STRICTER VERSION to reduce false positives)
-        if num_lines == 2:
-            angle = self.calc_angle(lines[0], lines[1])
-            angle_inv = 180 - angle
-            dist = math.sqrt((lines[0]['end'][0] - lines[1]['start'][0])**2 +
-                           (lines[0]['end'][1] - lines[1]['start'][1])**2)
-
-            self.get_logger().info(f'2-line candidate: angle={angle:.1f}°, inv_angle={angle_inv:.1f}°, '
-                                  f'gap={dist:.3f}m, L1={lines[0]["length"]:.3f}m, L2={lines[1]["length"]:.3f}m')
-
-            target_angle, tolerance = self.TRIANGLE_ANGLE_40
-
-            angle_ok = abs(angle_inv - target_angle) < 6  # Tighter: was 8
-            gap_ok = dist < self.CORNER_GAP_MAX
-            length_ok = (lines[0]['length'] < self.MAX_TRIANGLE_LENGTH and
-                        lines[1]['length'] < self.MAX_TRIANGLE_LENGTH and
-                        lines[0]['length'] > 0.10 and lines[1]['length'] > 0.07)
-            ratio = max(lines[0]['length'], lines[1]['length']) / max(min(lines[0]['length'], lines[1]['length']), 0.01)
-            ratio_ok = ratio < 3.0  # Lines shouldn't differ by more than 3x
-
-            if angle_ok and gap_ok and length_ok and ratio_ok:
-                self.get_logger().info(
-                    f'✓ Triangle detected (2 lines, angle={angle_inv:.1f}°, gap={dist:.3f}m, '
-                    f'ratio={ratio:.2f})'
-                )
-                return 'Triangle'
-            else:
-                self.get_logger().debug(
-                    f'2-line rejected: angle_ok={angle_ok}, gap_ok={gap_ok}, '
-                    f'length_ok={length_ok}, ratio_ok={ratio_ok} (ratio={ratio:.2f})'
-                )
-
-        # 3-line detection (Square or Pentagon)
+        # PRIORITY 1: Check 3-line shapes FIRST (Pentagon/Square) to avoid misclassification
         if num_lines == 3:
             angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(num_lines-1)]
             lengths = [l['length'] for l in lines]
@@ -420,43 +388,30 @@ class HoughLineDetector(Node):
                 self.get_logger().info(f'✓ Square detected (3 lines, angles={[f"{a:.1f}" for a in angles]}°)')
                 return 'Square'
 
-        # 4-line Triangle detection
-        if num_lines == 4:
-            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(num_lines-1)]
-            lengths = [l['length'] for l in lines]
+        if num_lines == 2:
+            angle = self.calc_angle(lines[0], lines[1])
+            angle_inv = 180 - angle
+            corner_gap = math.sqrt((lines[0]['end'][0] - lines[1]['start'][0])**2 +
+                                  (lines[0]['end'][1] - lines[1]['start'][1])**2)
 
-            # Check corner gaps (but don't reject immediately)
-            gaps = []
-            for i in range(num_lines-1):
-                gap = math.sqrt((lines[i]['end'][0] - lines[i+1]['start'][0])**2 +
-                               (lines[i]['end'][1] - lines[i+1]['start'][1])**2)
-                gaps.append(gap)
+            L1 = lines[0]['length']
+            L2 = lines[1]['length']
 
-            self.get_logger().info(
-                f'4-line candidate: angles={[f"{a:.1f}" for a in angles]}°, '
-                f'lengths={[f"{l:.3f}" for l in lengths]}m, gaps={[f"{g:.3f}" for g in gaps]}m'
-            )
+            self.get_logger().info(f'2-line: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, gap={corner_gap:.3f}m')
 
-            # Triangle: 130°-90°-130° pattern (more relaxed tolerances)
-            # The pattern can vary due to perspective and noise
-            angle_match_130_1 = abs(angles[0] - 130) < 12
-            angle_match_90 = abs(angles[1] - 90) < 12
-            angle_match_130_2 = abs(angles[2] - 130) < 12
+            # Triangle criteria
+            TRIANGLE_ANGLE = 130.0
+            TRIANGLE_ANGLE_TOL = 8.0
+            TRIANGLE_L2_TARGET = 0.22  # 22cm
+            TRIANGLE_L2_TOL = 0.02     # ±2cm
 
-            # Check if gaps are reasonable (at least 2 out of 3 should be good)
-            good_gaps = sum(1 for g in gaps if g < self.CORNER_GAP_MAX)
+            angle_ok = abs(angle_inv - TRIANGLE_ANGLE) < TRIANGLE_ANGLE_TOL
+            length_ok = abs(L2 - TRIANGLE_L2_TARGET) < TRIANGLE_L2_TOL
+            gap_ok = corner_gap < self.CORNER_GAP_MAX
 
-            if angle_match_130_1 and angle_match_90 and angle_match_130_2 and good_gaps >= 2:
-                self.get_logger().info(
-                    f'✓ Triangle detected (4 lines, angles={[f"{a:.1f}" for a in angles]}°, '
-                    f'gaps={[f"{g:.3f}" for g in gaps]}m, {good_gaps}/3 gaps good)'
-                )
+            if angle_ok and length_ok and gap_ok:
+                self.get_logger().info(f'✓ Triangle detected: angle={angle_inv:.1f}°, L2={L2:.3f}m')
                 return 'Triangle'
-            else:
-                self.get_logger().debug(
-                    f'4-line rejected: angle_match=[{angle_match_130_1},{angle_match_90},{angle_match_130_2}], '
-                    f'good_gaps={good_gaps}/3'
-                )
 
         self.get_logger().debug(f'{num_lines} lines did not match any shape pattern')
         return None
@@ -836,7 +791,7 @@ class HoughLineDetector(Node):
         perp_dist = np.linalg.norm(to_mid - np.dot(to_mid, dir1) * dir1)
 
         # Merge if: endpoints are close OR lines are collinear with small gap
-        return min_dist < self.merge_distance_tolerance or (perp_dist < 0.05 and min_dist < 0.30)
+        return min_dist < self.merge_distance_tolerance or (perp_dist < 0.08 and min_dist < 0.40)
 
     def merge_group(self, group: List[Dict]) -> Dict:
         """Merge multiple lines into one"""

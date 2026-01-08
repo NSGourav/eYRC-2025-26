@@ -19,6 +19,9 @@ class EbotNav(Node):
         self.current_y=None
         self.current_yaw=None
 
+        self.sq_counter=0
+        self.tr_counter=0
+
         # self.waypoints = [
         #     (0.3,-5.0, 1.57),
         #     (0.3,-3.0, 1.57),
@@ -39,12 +42,12 @@ class EbotNav(Node):
             (0.0, 0.0, -1.57),
             (0.7, -1.857, 0.0),           # 1st lane start
             (2.072, -1.704, 0.0),           # Dock station
-            (5.035, -1.857, 0.0),           # 1st lane end
+            (4.835, -1.707, 0.0),           # 1st lane end
             (4.495, 0.006, 3.14),           # 2nd lane start
             (1.448, 0.072, 3.14),           # 2nd lane end
             (1.108, 1.656, 0.0),            # 3rd lane start
-            (5.0, 1.955, 0.0),            # 3rd lane end
-            (0.0, 0.0, -1.57)]               # Home
+            (4.8, 1.955, 0.0),            # 3rd lane end
+            (0.0, 0.0, 3.14)]               # Home
         self.i = 0
 
         # Priority navigation state
@@ -126,10 +129,19 @@ class EbotNav(Node):
                 shape_type, x, y = self.priority_goal
                 self.get_logger().info(f"Reached PRIORITY goal: {shape_type} at ({x:.3f}, {y:.3f})")
                 if shape_type == "Square":
-                    self.publish_dock_status("BAD_HEALTH",4)
-                    time.sleep(10)
+                    self.sq_counter+=1
+                    if self.sq_counter==1:
+                        self.publish_dock_status("BAD_HEALTH",4)
+                    elif self.sq_counter==2:
+                        self.publish_dock_status("BAD_HEALTH",7)
+                    time.sleep(3)
                 if shape_type == "Triangle":
-                    self.publish_dock_status("FERTILIZER_REQUIRED",0)
+                    self.tr_counter+=1
+                    if self.tr_counter==1:
+                        self.publish_dock_status("FERTILIZER_REQUIRED",1)
+                    elif self.tr_counter==2:
+                        self.publish_dock_status("FERTILIZER_REQUIRED",6)
+                    time.sleep(3)
 
                 # Clear priority goal
                 self.priority_goal = None

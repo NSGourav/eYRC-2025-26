@@ -36,4 +36,11 @@ install(PROGRAMS
     src/bonus_task2_boiler_plate.py
     DESTINATION lib/${PROJECT_NAME}
 )
+install(PROGRAMS
+    src/Task4A/Task4A_perception.py
+    src/Task4A/Task4A_manipulation.py
+    src/Task4A/Joint_Rotation_Tester.py
+    src/Task4A/HSV_colour_detector.py
+    DESTINATION lib/${PROJECT_NAME}
+)
 ament_package()

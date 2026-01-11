@@ -4,9 +4,9 @@ This repository contains the simulation setup for the Krishi Cobot (eYantra Robo
 
 ## Launch Commands
 
-To launch Gazebo World for Task 3B:
+To launch Gazebo World for Task 4C:
 ```bash
-ros2 launch eyantra_warehouse task3b.launch.py
+ros2 launch eyantra_warehouse task4c.launch.py
 ```
 
 ## Workspace Structure

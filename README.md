@@ -9,6 +9,31 @@ To launch Gazebo World for Task 4C:
 ros2 launch eyantra_warehouse task4c.launch.py
 ```
 
+```bash
+eyantra-autoeval evaluate --year 2025 --theme KC --task 4C
+```
+
+```bash
+ros2 run ebot_nav shape_detector_task4c.py
+```
+
+```bash
+ros2 run ebot_nav ebot_nav_task4c.py
+```
+
+```bash
+ros2 run ebot_nav main.py
+```
+
+```bash
+ros2 run ur5_control task4c_manipulation.py
+```
+
+```bash
+ros2 run ur5_control task4c_perception.py
+```
+
+
 ## Workspace Structure
 
 - `ebot_description/` - Contains ebot robot description, launch files, and configurations

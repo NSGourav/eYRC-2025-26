@@ -31,7 +31,7 @@ class EbotNav(Node):
         # self.triangle_counter = 0
 
         self.waypoints = [
-            (+0.40, -5.30, +1.57),      # 1st lane start
+            (+0.40, -4.30, +1.57),      # 1st lane start
             (+0.53, -1.95, +1.57),      # Dock Station
             (+0.40, +1.10, +1.57),      # 1st lane end
             (-1.53, +1.10, -1.57),      # 2st lane start
@@ -158,41 +158,24 @@ class EbotNav(Node):
                 self.get_logger().info(f"Reached PRIORITY goal: {shape_type} at ({x:.3f}, {y:.3f})")
 
                 if shape_type == "Square":
-                    # Remove safety offsets to get actual shape position for plant_id calculation
-                    # Safety offsets applied: X +0.10, Y moves toward centerline by 0.25
+                    
                     goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
-                    actual_shape_x = goal_x - 0.10  # Remove X offset
-                    # Y offset moves goal toward 0, so reverse by moving away from 0
-                    actual_shape_y = goal_y + (0.25 if goal_y < 0 else -0.25)
-                    shape_pos = [actual_shape_x, actual_shape_y]
+                    shape_pos = [goal_x, goal_y]
                     plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
-                    self.get_logger().info(f"Square: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({actual_shape_x:.3f}, {actual_shape_y:.3f}), Plant ID={plant_id}")
+                    self.get_logger().info(f"Square: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({goal_x:.3f}, {goal_y:.3f}), Plant ID={plant_id}")
                     self.publish_dock_status("BAD_HEALTH", plant_id)
-                    # self.square_counter += 1
-                    # if self.square_counter == 1:
-                    #     self.publish_dock_status("BAD_HEALTH",3)
-                    # elif self.square_counter == 2:
-                    #     self.publish_dock_status("BAD_HEALTH",7)
+
                     time.sleep(3)
 
                 if shape_type == "Triangle":
-                    # Remove safety offsets to get actual shape position for plant_id calculation
-                    # Safety offsets applied: X +0.25, Y moves toward centerline by 0.60
+
                     goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
-                    actual_shape_x = goal_x - 0.25  # Remove X offset
-                    # Y offset moves goal toward 0, so reverse by moving away from 0
-                    actual_shape_y = goal_y + (0.60 if goal_y < 0 else -0.60)
-                    shape_pos = [actual_shape_x, actual_shape_y]
+
+                    shape_pos = [goal_x, goal_y]
                     plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
-                    self.get_logger().info(f"Triangle: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({actual_shape_x:.3f}, {actual_shape_y:.3f}), Plant ID={plant_id}")
+                    self.get_logger().info(f"Triangle: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({goal_x:.3f}, {goal_y:.3f}), Plant ID={plant_id}")
                     self.publish_dock_status("FERTILIZER_REQUIRED", plant_id)
-                    # self.triangle_counter+=1
-                    # if self.triangle_counter == 1:
-                    #     self.publish_dock_status("FERTILIZER_REQUIRED",4)
-                    # elif self.triangle_counter == 2:
-                    #     self.publish_dock_status("FERTILIZER_REQUIRED",5)
-                    # elif self.triangle_counter == 3:
-                    #     self.publish_dock_status("FERTILIZER_REQUIRED",7)
+
                     time.sleep(3)
 
                 # Resume navigation to interrupted waypoint

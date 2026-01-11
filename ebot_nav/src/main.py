@@ -3,6 +3,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String,Bool
 from nav_msgs.msg import Odometry
+from std_srvs.srv import SetBool
 import time
 import math
 
@@ -16,6 +17,9 @@ class EbotNav(Node):
         self.shape_pub = self.create_publisher(String, '/detection_status', 10)
         self.pose_pub = self.create_publisher(String,"/set_immediate_goal",10)
 
+        self.pick_place_client = self.create_client(SetBool, '/pick_and_place')
+        self.waiting_for_pick_place = False
+        
         self.current_x = None
         self.current_y = None
         self.current_yaw = None
@@ -26,11 +30,14 @@ class EbotNav(Node):
         self.waypoints = [
             (+0.40, -5.30, +1.57),      # 1st lane start
             (+0.53, -1.95, +1.57),      # Dock Station
-            (+0.50, +1.10, +1.57),      # 1st lane end
+            (+0.40, +1.10, +1.57),      # 1st lane end
             (-1.53, +1.10, -1.57),      # 2st lane start
             (-1.53, -5.50, -1.57),      # 2st lane end
             (-3.56, -5.50, +1.57),      # 3st lane start
             (-3.56, +1.10, +1.57),      # 3st lane end
+            (+0.40, +1.10, +0.00),      # 1st lane end
+            (+0.40, +1.10, -1.57),      # 1st lane end
+            (+0.53, -1.95, -1.57),      # Dock Station
             (-1.53, -6.61, -1.57)       # Home position  
         ]
 
@@ -66,6 +73,29 @@ class EbotNav(Node):
             time.sleep(1)  # Small delay to ensure message is sent
         else:
             self.get_logger().info("All waypoints reached.")
+
+    def call_pick_and_place_service(self, data_value: bool):
+
+        req = SetBool.Request()
+        req.data = data_value
+
+        self.waiting_for_pick_place = True
+        future = self.pick_place_client.call_async(req)
+        future.add_done_callback(self.pick_place_response_callback)
+
+    def pick_place_response_callback(self, future):
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info("Pick and place service completed successfully")
+            else:
+                self.get_logger().warn("Pick and place service failed")
+
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
+
+        self.waiting_for_pick_place = False
+        self.publish_next_waypoint()
 
     def shape_pose_recieved_callback(self, msg):
 
@@ -120,17 +150,19 @@ class EbotNav(Node):
                 if shape_type == "Square":
                     self.square_counter += 1
                     if self.square_counter == 1:
-                        self.publish_dock_status("BAD_HEALTH",4)
+                        self.publish_dock_status("BAD_HEALTH",3)
                     elif self.square_counter == 2:
                         self.publish_dock_status("BAD_HEALTH",7)
                     time.sleep(3)
 
                 if shape_type == "Triangle":
                     self.triangle_counter+=1
-                    if self.triangle_counter==1:
-                        self.publish_dock_status("FERTILIZER_REQUIRED",1)
-                    elif self.triangle_counter==2:
-                        self.publish_dock_status("FERTILIZER_REQUIRED",6)
+                    if self.triangle_counter == 1:
+                        self.publish_dock_status("FERTILIZER_REQUIRED",4)
+                    elif self.triangle_counter == 2:
+                        self.publish_dock_status("FERTILIZER_REQUIRED",5)
+                    elif self.triangle_counter == 3:
+                        self.publish_dock_status("FERTILIZER_REQUIRED",7)
                     time.sleep(3)
 
                 # Resume navigation to interrupted waypoint
@@ -143,10 +175,19 @@ class EbotNav(Node):
                 self.publish_next_waypoint()
 
             else:
-                if self.waypoint_counter == 2:
+                if (self.waypoint_counter == 2 or self.waypoint_counter == 10) and not self.waiting_for_pick_place:
+                    self.get_logger().info("Reached Dock Station. Triggering pick and place service.")
                     self.publish_dock_status("DOCK_STATION",0)
                     time.sleep(2)
-                self.publish_next_waypoint()
+                    if self.waypoint_counter == 2:
+                        service_data = False
+                    elif self.waypoint_counter == 10:
+                        service_data = True
+                    self.call_pick_and_place_service(service_data)
+                    return
+                else:
+                    if not self.waiting_for_pick_place:
+                        self.publish_next_waypoint()
 
     def publish_dock_status(self,shape_status,plant_id):
             status_msg = String()

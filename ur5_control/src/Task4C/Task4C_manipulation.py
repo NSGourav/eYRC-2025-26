@@ -281,14 +281,14 @@ class ArmController(Node):
             self.goal_pose_nav(self.fertiliser_pose)
             self.gripper_service("attach", "fertiliser_can")
 
+            response.success = True
+            response.message = "Sequence 1 completed successfully"
+
             self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
             self.goal_pose_nav(self.bad_fruit_waypoint)
 
             self.goal_pose_nav(self.drop_pose)
             self.gripper_service("detach", "fertiliser_can")
-            
-            response.success = True
-            response.message = "Sequence 1 completed successfully"
         
         return response
 

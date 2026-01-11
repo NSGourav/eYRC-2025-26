@@ -29,6 +29,7 @@ if(BUILD_TESTING)
 endif()
 
 install(PROGRAMS
+    src/shape_detect.py
     src/ebot_dwa.py
     src/main.py
     DESTINATION lib/${PROJECT_NAME}

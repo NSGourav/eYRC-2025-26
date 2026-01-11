@@ -55,14 +55,14 @@ class ArmController(Node):
 
         # Error positions
         self.position_tolerance = 0.05  
-        self.orientation_tolerance = 0.1  # Orientation tolerance
-        self.max_angular_velocity=1.0
-        self.max_linear_velocity=0.2
+        self.orientation_tolerance = 0.1
+        self.max_angular_velocity = 1.0
+        self.max_linear_velocity = 0.2
         self.min_linear_velocity = 0.05
         
         # Control loop parameters
-        self.kp_position=1.5
-        self.kp_orientation=3.0
+        self.kp_position = 1.5
+        self.kp_orientation = 3.0
 
     def pose_callback(self):
         self.current_pose=self.lookup_tf('tool0')
@@ -174,7 +174,7 @@ class ArmController(Node):
             self.goal_pose_nav(self.bad_fruit_waypoint)
 
         # self.goal_pose_nav(home_pose)
-        self.flag_fruit=0
+        self.flag_fruit = 0
 
     def goal_pose_nav(self,target_location):
 
@@ -256,19 +256,18 @@ class ArmController(Node):
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
         
-        self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.01
+        self.fertiliser_pose[1] += 0.01
         self.goal_pose_nav(self.fertiliser_pose)
 
         self.control_magnet(True)
 
-        self.fertiliser_pose[1]=self.fertiliser_pose[1]+0.2
+        self.fertiliser_pose[1] += 0.2
         self.goal_pose_nav(self.fertiliser_pose)
 
         self.goal_pose_nav(self.drop_pose)
         self.control_magnet(False)
 
-        print('fertliser done')
-        self.flag_fruit=1
+        self.flag_fruit = 1
     
 def main():
     rclpy.init()

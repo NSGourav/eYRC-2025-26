@@ -6,6 +6,7 @@ from nav_msgs.msg import Odometry
 from std_srvs.srv import SetBool
 import time
 import math
+import numpy as np
 
 class EbotNav(Node):
     def __init__(self):
@@ -24,8 +25,10 @@ class EbotNav(Node):
         self.current_y = None
         self.current_yaw = None
 
-        self.square_counter = 0
-        self.triangle_counter = 0
+        self.system="SIM"
+
+        # self.square_counter = 0
+        # self.triangle_counter = 0
 
         self.waypoints = [
             (+0.40, -5.30, +1.57),      # 1st lane start
@@ -120,14 +123,21 @@ class EbotNav(Node):
             self.priority_goal = (shape_type, x, y)
 
             # Choose yaw (1.57 or -1.57) based on which is closer to current yaw
-            target_yaw = 0.0  # Default
-            
-            while self.current_yaw > math.pi:
+            if self.system =="SIM":
+                target_yaw = 1.57
+            else:
+                target_yaw = 0.0  # Default
+
+            current_normalized_yaw = self.current_yaw
+            while current_normalized_yaw > math.pi:
                 current_normalized_yaw -= 2 * math.pi
-            while self.current_yaw < -math.pi:
+            while current_normalized_yaw < -math.pi:
                 current_normalized_yaw += 2 * math.pi
-            
-            target_yaw = 0.0 if abs(current_normalized_yaw) < math.pi/2 else math.pi
+
+            if self.system =="SIM":
+                target_yaw = 1.57 if abs(current_normalized_yaw - 1.57) < abs(current_normalized_yaw + 1.57)  else -1.57
+            else:
+                target_yaw = 0.0 if abs(current_normalized_yaw) < math.pi/2 else math.pi
             self.get_logger().info(f"Current yaw: {self.current_yaw:.3f}, choosing target yaw: {target_yaw:.3f}")
 
             # Immediately publish priority goal
@@ -148,21 +158,41 @@ class EbotNav(Node):
                 self.get_logger().info(f"Reached PRIORITY goal: {shape_type} at ({x:.3f}, {y:.3f})")
 
                 if shape_type == "Square":
-                    self.square_counter += 1
-                    if self.square_counter == 1:
-                        self.publish_dock_status("BAD_HEALTH",3)
-                    elif self.square_counter == 2:
-                        self.publish_dock_status("BAD_HEALTH",7)
+                    # Remove safety offsets to get actual shape position for plant_id calculation
+                    # Safety offsets applied: X +0.10, Y moves toward centerline by 0.25
+                    goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
+                    actual_shape_x = goal_x - 0.10  # Remove X offset
+                    # Y offset moves goal toward 0, so reverse by moving away from 0
+                    actual_shape_y = goal_y + (0.25 if goal_y < 0 else -0.25)
+                    shape_pos = [actual_shape_x, actual_shape_y]
+                    plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
+                    self.get_logger().info(f"Square: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({actual_shape_x:.3f}, {actual_shape_y:.3f}), Plant ID={plant_id}")
+                    self.publish_dock_status("BAD_HEALTH", plant_id)
+                    # self.square_counter += 1
+                    # if self.square_counter == 1:
+                    #     self.publish_dock_status("BAD_HEALTH",3)
+                    # elif self.square_counter == 2:
+                    #     self.publish_dock_status("BAD_HEALTH",7)
                     time.sleep(3)
 
                 if shape_type == "Triangle":
-                    self.triangle_counter+=1
-                    if self.triangle_counter == 1:
-                        self.publish_dock_status("FERTILIZER_REQUIRED",4)
-                    elif self.triangle_counter == 2:
-                        self.publish_dock_status("FERTILIZER_REQUIRED",5)
-                    elif self.triangle_counter == 3:
-                        self.publish_dock_status("FERTILIZER_REQUIRED",7)
+                    # Remove safety offsets to get actual shape position for plant_id calculation
+                    # Safety offsets applied: X +0.25, Y moves toward centerline by 0.60
+                    goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
+                    actual_shape_x = goal_x - 0.25  # Remove X offset
+                    # Y offset moves goal toward 0, so reverse by moving away from 0
+                    actual_shape_y = goal_y + (0.60 if goal_y < 0 else -0.60)
+                    shape_pos = [actual_shape_x, actual_shape_y]
+                    plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
+                    self.get_logger().info(f"Triangle: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({actual_shape_x:.3f}, {actual_shape_y:.3f}), Plant ID={plant_id}")
+                    self.publish_dock_status("FERTILIZER_REQUIRED", plant_id)
+                    # self.triangle_counter+=1
+                    # if self.triangle_counter == 1:
+                    #     self.publish_dock_status("FERTILIZER_REQUIRED",4)
+                    # elif self.triangle_counter == 2:
+                    #     self.publish_dock_status("FERTILIZER_REQUIRED",5)
+                    # elif self.triangle_counter == 3:
+                    #     self.publish_dock_status("FERTILIZER_REQUIRED",7)
                     time.sleep(3)
 
                 # Resume navigation to interrupted waypoint
@@ -195,6 +225,56 @@ class EbotNav(Node):
             self.shape_pub.publish(status_msg)
             self.get_logger().info(f"<<<<Published SHAPE>>>>")
             time.sleep(0.1)
+
+    def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float):
+        """
+        Assign plant_id (0-8) based on lane and segment
+        """
+        # Define lane boundaries (expanded to include robot waypoint positions)
+        lanes = {
+            1: {'x_range': (0.20, 0.60), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
+            2: {'x_range': (-1.70, -1.20), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
+            3: {'x_range': (-3.70, -3.20), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
+        }
+
+        # Find current lane
+        current_lane = None
+        for lane_num, lane_data in lanes.items():
+            x_min, x_max = lane_data['x_range']
+            if x_min <= robot_x <= x_max:
+                current_lane = lane_num
+                break
+
+        if current_lane is None:
+            self.get_logger().warn(f"Robot x={robot_x:.3f} not in any lane")
+            return None
+
+        is_left_side = shape_world_pos[0] < robot_x
+
+        # Lane 1: Dock on right, segments on left
+        if current_lane == 1:
+            if not is_left_side:
+                return 0
+            else:
+                for (y_min, y_max), plant_id in lanes[1]['left_segments']:
+                    if y_min <= robot_y <= y_max:
+                        return plant_id
+
+        # Lane 2: Both sides
+        elif current_lane == 2:
+            segments = lanes[2]['right_segments'] if not is_left_side else lanes[2]['left_segments']
+            for (y_min, y_max), plant_id in segments:
+                if y_min <= robot_y <= y_max:
+                    return plant_id
+
+        # Lane 3: Right side only
+        elif current_lane == 3 and not is_left_side:
+            for (y_min, y_max), plant_id in lanes[3]['right_segments']:
+                if y_min <= robot_y <= y_max:
+                    return plant_id
+
+        self.get_logger().warn(f"Could not assign plant_id")
+        return None
 
 def main(args=None):
     rclpy.init(args=args)

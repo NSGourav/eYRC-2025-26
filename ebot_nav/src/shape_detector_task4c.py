@@ -56,8 +56,11 @@ class HoughLineDetector(Node):
     TRIANGLE_L2_TOLERANCE = 0.05  # L2 length tolerance (meters)
 
     # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y = 0.23  # 25cm offset in y-direction
+    SAFETY_OFFSET_Y_SQUARE = 0.28  # 25cm offset in y-direction
     SAFETY_OFFSET_X_SQUARE = 0.10  # 10cm offset in x-direction for Square
+
+    SAFETY_OFFSET_Y_TRIANGLE = 0.60  # 25cm offset in y-direction  
+    SAFETY_OFFSET_X_TRIANGLE = 0.25  # 15cm offset in x-direction for Triangle
 
     def __init__(self):
         super().__init__('hough_line_detector')
@@ -85,6 +88,11 @@ class HoughLineDetector(Node):
         self.detected_shapes: List[ShapeDetection] = []
         self.detection_range = 1.0  # Minimum 1m separation between shapes
         self.pending_shape: Optional[Tuple[str, int]] = None  # (shape_status, plant_id)
+
+        # Pentagon gating: Only detect Square/Triangle AFTER Pentagon is found
+        self.pentagon_detected = False
+        self.pentagon_position: Optional[np.ndarray] = None  # Store pentagon location
+        self.pentagon_exclusion_radius = 1.5  # Don't detect triangles within 1.5m of pentagon
 
         # Robot state
         self.position_x = 0.0
@@ -130,6 +138,9 @@ class HoughLineDetector(Node):
             self.ax1 = None
             self.ax2 = None
             self.get_logger().info('Hough Line Detector started with visualization DISABLED')
+
+        # Gating notice
+        self.get_logger().info('WAITING FOR PENTAGON - Square/Triangle detection DISABLED until Pentagon is found')
 
     def odom_callback(self, msg: Odometry):
         """Update robot position from odometry"""
@@ -214,52 +225,102 @@ class HoughLineDetector(Node):
                     shape_position, scan_position_x, scan_position_y, scan_yaw
                 )
 
-                if is_new:
-                    plant_id = self.assign_plant_id(world_pos, scan_position_x, scan_position_y)
-                    shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
+                # GATING LOGIC: Pentagon must be detected first before Square/Triangle
+                if shape_type == 'Pentagon':
+                    # Always process Pentagon - it's the trigger for other detections
+                    if is_new:
+                        if not self.pentagon_detected:
+                            self.pentagon_detected = True
+                            self.pentagon_position = world_pos
+                            self.get_logger().info(
+                                f'🔓 PENTAGON DETECTED - Enabling Square/Triangle detection! '
+                                f'Position: ({world_pos[0]:.2f}, {world_pos[1]:.2f})'
+                            )
 
-                    # Calculate goal position with safety offset for navigation/visualization
-                    if shape_type in ['Square', 'Triangle']:
+                        plant_id = self.assign_plant_id(world_pos, scan_position_x, scan_position_y)
+                        shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
+                        goal_world_pos = world_pos  # Pentagon (dock) - no offset needed
+
+                        detection = ShapeDetection(
+                            local_position=shape_position,
+                            world_position=world_pos,
+                            goal_position=goal_world_pos,
+                            shape_type=shape_type,
+                            distance=shape_distance,
+                            plant_id=plant_id
+                        )
+                        self.detected_shapes.append(detection)
+
+                        self.get_logger().info(
+                            f'✓ {shape_type} detected | Plant ID: {plant_id} | '
+                            f'World: ({world_pos[0]:.2f}, {world_pos[1]:.2f}) | '
+                            f'Total: {len(self.detected_shapes)}'
+                        )
+
+                        self.publish_shape_markers()
+                    else:
+                        self.get_logger().debug(
+                            f'Duplicate {shape_type} ignored at ({world_pos[0]:.2f}, {world_pos[1]:.2f})'
+                        )
+                        shape_type = f'{shape_type} (Duplicate)'
+
+                elif shape_type in ['Square', 'Triangle']:
+                    # Gate: Only process Square/Triangle AFTER Pentagon is detected
+                    if not self.pentagon_detected:
+                        self.get_logger().debug(
+                            f'[GATE] {shape_type} detected but Pentagon not found yet - IGNORING'
+                        )
+                        return
+
+                    # Additional filter: Don't detect Triangles near Pentagon (false positives)
+                    if shape_type == 'Triangle' and self.pentagon_position is not None:
+                        distance_to_pentagon = np.linalg.norm(world_pos - self.pentagon_position)
+                        if distance_to_pentagon < self.pentagon_exclusion_radius:
+                            self.get_logger().debug(
+                                f'[GATE] Triangle too close to Pentagon ({distance_to_pentagon:.2f}m < '
+                                f'{self.pentagon_exclusion_radius}m) - IGNORING (likely false positive)'
+                            )
+                            return
+
+                    # Proceed with detection
+                    if is_new:
+                        plant_id = self.assign_plant_id(world_pos, scan_position_x, scan_position_y)
+                        shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
+
+                        # Calculate goal position with safety offset
                         goal_world_pos = self.local_to_world(
                             shape_position, scan_position_x, scan_position_y, scan_yaw,
                             apply_safety=True, shape_type=shape_type
                         )
-                    else:
-                        # Pentagon (dock) - no offset needed
-                        goal_world_pos = world_pos
 
-                    # Store detection with both actual and goal positions
-                    detection = ShapeDetection(
-                        local_position=shape_position,
-                        world_position=world_pos,      # Actual position (for duplicate checking)
-                        goal_position=goal_world_pos,  # Goal position (for navigation & visualization)
-                        shape_type=shape_type,
-                        distance=shape_distance,
-                        plant_id=plant_id
-                    )
-                    self.detected_shapes.append(detection)
+                        detection = ShapeDetection(
+                            local_position=shape_position,
+                            world_position=world_pos,
+                            goal_position=goal_world_pos,
+                            shape_type=shape_type,
+                            distance=shape_distance,
+                            plant_id=plant_id
+                        )
+                        self.detected_shapes.append(detection)
 
-                    # Log detection
-                    self.get_logger().info(
-                        f'✓ {shape_type} detected | Plant ID: {plant_id} | '
-                        f'World: ({world_pos[0]:.2f}, {world_pos[1]:.2f}) | '
-                        f'Total: {len(self.detected_shapes)}'
-                    )
+                        self.get_logger().info(
+                            f'✓ {shape_type} detected | Plant ID: {plant_id} | '
+                            f'World: ({world_pos[0]:.2f}, {world_pos[1]:.2f}) | '
+                            f'Total: {len(self.detected_shapes)}'
+                        )
 
-                    # Publish shape pose for priority navigation (Square and Triangle only)
-                    if shape_type in ['Square', 'Triangle']:
+                        # Publish shape pose for priority navigation
                         pose_msg = String()
                         pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f}"
                         self.shape_pose_pub.publish(pose_msg)
                         self.pending_shape = (shape_status, plant_id)
 
-                    # Publish updated markers to RViz
-                    self.publish_shape_markers()
-                else:
-                    self.get_logger().debug(
-                        f'Duplicate {shape_type} ignored at ({world_pos[0]:.2f}, {world_pos[1]:.2f})'
-                    )
-                    shape_type = f'{shape_type} (Duplicate)'
+                        self.publish_shape_markers()
+                    else:
+                        self.get_logger().debug(
+                            f'Duplicate {shape_type} ignored at ({world_pos[0]:.2f}, {world_pos[1]:.2f})'
+                        )
+                        shape_type = f'{shape_type} (Duplicate)'
 
             self.visualize(filtered_points, binary_image, best_group, shape_type, shape_position)
 
@@ -789,11 +850,11 @@ class HoughLineDetector(Node):
         """
         Assign plant_id (0-8) based on lane and segment
         """
-        # Define lane boundaries
+        # Define lane boundaries (expanded to include robot waypoint positions)
         lanes = {
-            1: {'x_range': (0.2, 0.35), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
-            2: {'x_range': (-1.45, -1.3), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
-            3: {'x_range': (-3.5, -3.35), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
+            1: {'x_range': (0.20, 0.60), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
+            2: {'x_range': (-1.70, -1.20), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
+            3: {'x_range': (-3.70, -3.20), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
         }
 
         # Find current lane
@@ -841,12 +902,13 @@ class HoughLineDetector(Node):
         Y-offset: Shifts goal toward robot's centerline by SAFETY_OFFSET_Y
         X-offset: For Square only, push forward by SAFETY_OFFSET_X_SQUARE
         """
-        offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y if local_pos[1] != 0 else 0.0
-        offset_x = 0.0
-
-        # For Square: add X offset away from robot (positive X direction - push forward)
         if shape_type == 'Square':
             offset_x = self.SAFETY_OFFSET_X_SQUARE
+            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_SQUARE if local_pos[1] != 0 else 0.0
+
+        elif shape_type == 'Triangle':
+            offset_x = self.SAFETY_OFFSET_X_TRIANGLE
+            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_TRIANGLE if local_pos[1] != 0 else 0.0       
 
         adjusted_pos = np.array([local_pos[0] + offset_x, local_pos[1] + offset_y])
         return adjusted_pos

@@ -221,91 +221,50 @@ class EbotNav(Node):
 
     def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float):
         """
-        Assign plant_id (0-8) based on lane and segment.
-        Updated with refined calibration data for accurate plant identification.
+        Assign plant_id (0-8) based on bounding boxes.
+        Returns plant_id if shape is within any bounding box, else returns 0.
         """
-        # Define lane boundaries with updated segment calibration data
-        # Lane x_range boundaries still need to be defined based on robot waypoint positions
-        lanes = {
-            1: {
-                'x_range': (0.20, 0.60),
-                'right_id': 0,
-                'left_segments': [
-                    ((-5.1539, -3.4875), 1),
-                    ((-3.4875, -2.2041), 2),
-                    ((-2.2041, -0.7789), 3),
-                    ((-0.7789, 0.6695), 4)
-                ]
-            },
-            2: {
-                'x_range': (-1.70, -1.20),
-                'left_segments': [
-                    ((-5.1539, -3.4875), 1),
-                    ((-3.4875, -2.2041), 2),
-                    ((-2.2041, -0.7789), 3),
-                    ((-0.7789, 0.6695), 4)
-                ],
-                'right_segments': [
-                    ((-5.1539, -3.4875), 5),
-                    ((-0.7789, 0.6695), 6),
-                    ((-2.2041, -0.7789), 7),
-                    ((-0.7789, 0.6695), 8)
-                ]
-            },
-            3: {
-                'x_range': (-3.70, -3.20),
-                'right_segments': [
-                    ((-5.1539, -3.4875), 5),
-                    ((-0.7789, 0.6695), 6),
-                    ((-2.2041, -0.7789), 7),
-                    ((-0.7789, 0.6695), 8)
-                ]
-            }
+        # Define bounding boxes for each plant ID
+        bounding_boxes = {
+            1: [(0.3335, -5.1725), (0.3718, -3.4826), (-1.4512, -5.1725), (-1.4499, -3.4548)],
+            2: [(0.3718, -3.4826), (0.3729, -2.1404), (-1.4499, -3.4548), (-1.4488, -2.1265)],
+            3: [(0.3729, -2.1404), (0.3740, -0.7632), (-1.4488, -2.1265), (-1.4477, -0.7380)],
+            4: [(0.3740, -0.7632), (0.3752, 0.8777), (-1.4477, -0.7380), (-1.4464, 0.8791)],
+            5: [(-1.4512, -5.1725), (-1.4499, -3.4548), (-3.3366, -5.1725), (-3.3352, -3.4357)],
+            6: [(-1.4499, -3.4548), (-1.4488, -2.1265), (-3.3352, -3.4357), (-3.3342, -2.1359)],
+            7: [(-1.4488, -2.1265), (-1.4477, -0.7380), (-3.3342, -2.1359), (-3.3331, -0.7601)],
+            8: [(-1.4477, -0.7380), (-1.4464, 0.8791), (-3.3331, -0.7601), (-3.3317, 0.9461)]
         }
-
-        # Find current lane based on robot's x position
-        current_lane = None
-        for lane_num, lane_data in lanes.items():
-            x_min, x_max = lane_data['x_range']
-            if x_min <= robot_x <= x_max:
-                current_lane = lane_num
-                break
-
-        if current_lane is None:
-            self.get_logger().warn(f"Robot x={robot_x:.3f} not in any lane")
-            return None
-
-        # Determine if shape is on left or right side of robot
-        is_left_side = shape_world_pos[0] < robot_x
-
-        # Lane 1: Dock on right (plant_id=0), plant segments on left
-        if current_lane == 1:
-            if not is_left_side:
-                return 0  # Right side: dock location
-            else:
-                # Left side: check plant segments
-                for (y_min, y_max), plant_id in lanes[1]['left_segments']:
-                    if y_min <= robot_y <= y_max:
-                        return plant_id
-
-        # Lane 2: Plant segments on both sides
-        elif current_lane == 2:
-            segments = lanes[2]['left_segments'] if is_left_side else lanes[2]['right_segments']
-            for (y_min, y_max), plant_id in segments:
-                if y_min <= robot_y <= y_max:
-                    return plant_id
-
-        # Lane 3: Plant segments on right only (no left side)
-        elif current_lane == 3:
-            if not is_left_side:  # Right side only
-                for (y_min, y_max), plant_id in lanes[3]['right_segments']:
-                    if y_min <= robot_y <= y_max:
-                        return plant_id
-            # Left side not available in lane 3
-            return None
-
-        self.get_logger().warn(f"Could not assign plant_id for position ({robot_y:.3f})")
-        return None
+        
+        def point_in_polygon(point, polygon):
+            """Check if a point is inside a polygon using ray casting algorithm."""
+            x, y = point
+            n = len(polygon)
+            inside = False
+            
+            p1x, p1y = polygon[0]
+            for i in range(1, n + 1):
+                p2x, p2y = polygon[i % n]
+                if y > min(p1y, p2y):
+                    if y <= max(p1y, p2y):
+                        if x <= max(p1x, p2x):
+                            if p1y != p2y:
+                                xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                            if p1x == p2x or x <= xinters:
+                                inside = not inside
+                p1x, p1y = p2x, p2y
+            
+            return inside
+        
+        # Check which plant ID the shape belongs to
+        shape_x, shape_y = shape_world_pos[0], shape_world_pos[1]
+        
+        for plant_id, bbox in bounding_boxes.items():
+            if point_in_polygon((shape_x, shape_y), bbox):
+                return plant_id
+        
+        # If not in any bounding box, return 0
+        return 0
     
     def publish_dock_status(self,shape_status,plant_id):
             status_msg = String()

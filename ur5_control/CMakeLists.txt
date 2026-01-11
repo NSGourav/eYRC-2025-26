@@ -33,8 +33,8 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS
-    src/Task4C/Task4C_manipulation.py
-    src/Task4C/Task4C_perception.py
+    src/Task4C/task4c_manipulation.py
+    src/Task4C/task4c_perception.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS

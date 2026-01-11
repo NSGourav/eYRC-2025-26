@@ -33,6 +33,11 @@ install(PROGRAMS
     DESTINATION lib/${PROJECT_NAME}
 )
 install(PROGRAMS
+    src/Task4C/Task4C_manipulation.py
+    src/Task4C/Task4C_perception.py
+    DESTINATION lib/${PROJECT_NAME}
+)
+install(PROGRAMS
     src/bonus_task2_boiler_plate.py
     DESTINATION lib/${PROJECT_NAME}
 )

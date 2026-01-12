@@ -162,7 +162,7 @@ class EbotNav(Node):
                     
                     goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
                     shape_pos = [goal_x, goal_y]
-                    plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
+                    plant_id = self.assign_plant_id(shape_pos)
                     self.get_logger().info(f"Square: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({goal_x:.3f}, {goal_y:.3f}), Plant ID={plant_id}")
                     self.publish_dock_status("BAD_HEALTH", plant_id)
 
@@ -173,7 +173,7 @@ class EbotNav(Node):
                     goal_x, goal_y = self.priority_goal[1], self.priority_goal[2]
 
                     shape_pos = [goal_x, goal_y]
-                    plant_id = self.assign_plant_id(shape_pos, self.current_x, self.current_y)
+                    plant_id = self.assign_plant_id(shape_pos)
                     self.get_logger().info(f"Triangle: Goal=({goal_x:.3f}, {goal_y:.3f}), Actual=({goal_x:.3f}, {goal_y:.3f}), Plant ID={plant_id}")
                     self.publish_dock_status("FERTILIZER_REQUIRED", plant_id)
 
@@ -195,62 +195,40 @@ class EbotNav(Node):
                     time.sleep(2)
                     if self.waypoint_counter == 3:
                         service_data = False
-                        # self.publish_next_waypoint()
+                        self.publish_next_waypoint()
                     elif self.waypoint_counter == 11:
                         service_data = True
-                        # self.publish_next_waypoint()
-                    self.call_pick_and_place_service(service_data)
+                        self.publish_next_waypoint()
+                    # self.call_pick_and_place_service(service_data)
                     return
                 else:
                     if not self.waiting_for_pick_place:
                         self.publish_next_waypoint()
 
-    def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float):
-        """
-        Assign plant_id (0-8) based on bounding boxes.
-        Returns plant_id if shape is within any bounding box, else returns 0.
-        """
-        # Define bounding boxes for each plant ID
-        bounding_boxes = {
-            1: [(0.3335, -5.1725), (0.3718, -3.4826), (-1.4512, -5.1725), (-1.4499, -3.4548)],
-            2: [(0.3718, -3.4826), (0.3729, -2.1404), (-1.4499, -3.4548), (-1.4488, -2.1265)],
-            3: [(0.3729, -2.1404), (0.3740, -0.7632), (-1.4488, -2.1265), (-1.4477, -0.7380)],
-            4: [(0.3740, -0.7632), (0.3752, 0.8777), (-1.4477, -0.7380), (-1.4464, 0.8791)],
-            5: [(-1.4512, -5.1725), (-1.4499, -3.4548), (-3.3366, -5.1725), (-3.3352, -3.4357)],
-            6: [(-1.4499, -3.4548), (-1.4488, -2.1265), (-3.3352, -3.4357), (-3.3342, -2.1359)],
-            7: [(-1.4488, -2.1265), (-1.4477, -0.7380), (-3.3342, -2.1359), (-3.3331, -0.7601)],
-            8: [(-1.4477, -0.7380), (-1.4464, 0.8791), (-3.3331, -0.7601), (-3.3317, 0.9461)]
+    def assign_plant_id(self, actual_pos):
+        plant_location = {
+            1: np.array([-0.52, -4.10]),
+            2: np.array([-0.52, -2.75]),
+            3: np.array([-0.52, -1.40]),
+            4: np.array([-0.52, -0.05]),
+            5: np.array([-2.40, -4.10]),
+            6: np.array([-2.40, -2.75]),
+            7: np.array([-2.40, -1.40]),
+            8: np.array([-2.40, -0.05])
         }
-        
-        def point_in_polygon(point, polygon):
-            """Check if a point is inside a polygon using ray casting algorithm."""
-            x, y = point
-            n = len(polygon)
-            inside = False
-            
-            p1x, p1y = polygon[0]
-            for i in range(1, n + 1):
-                p2x, p2y = polygon[i % n]
-                if y > min(p1y, p2y):
-                    if y <= max(p1y, p2y):
-                        if x <= max(p1x, p2x):
-                            if p1y != p2y:
-                                xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                            if p1x == p2x or x <= xinters:
-                                inside = not inside
-                p1x, p1y = p2x, p2y
-            
-            return inside
-        
-        # Check which plant ID the shape belongs to
-        shape_x, shape_y = shape_world_pos[0], shape_world_pos[1]
-        
-        for plant_id, bbox in bounding_boxes.items():
-            if point_in_polygon((shape_x, shape_y), bbox):
-                return plant_id
-        
-        # If not in any bounding box, return 0
-        return 0
+
+        min_dist = float('inf')
+        closest_id = None
+
+        for plant_id, pos in plant_location.items():
+            dist = np.linalg.norm(actual_pos - pos)
+
+            # Tie handled by choosing smaller plant_id
+            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
+                min_dist = dist
+                closest_id = plant_id
+
+        return closest_id
     
     def publish_dock_status(self,shape_status,plant_id):
             status_msg = String()

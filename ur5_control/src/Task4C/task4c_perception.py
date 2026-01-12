@@ -149,7 +149,7 @@ class Fert_Bad_Fruit_Detector(Node):
 
         # Parameters for stable TF's
         self.tracked_fruits = {}         # Dictionary storing all currently tracked bad fruits with their smoothed positions and tracking state
-        self.next_stable_id = 0          # Counter for assigning unique IDs to newly detected bad fruits (increments with each new detection)
+        self.next_stable_id = 1          # Counter for assigning unique IDs to newly detected bad fruits (increments with each new detection)
         self.position_threshold = 40     # Maximum pixel distance to consider a detection as the same fruit across frames
         self.max_missing_frames = 100    # Number of consecutive frames a fruit can be missing before it's removed from tracking
         self.smoothing_alpha = 0.3       # Exponential smoothing factor for position filtering (0.2-0.4 recommended, lower = smoother but slower response)
@@ -307,7 +307,7 @@ class Fert_Bad_Fruit_Detector(Node):
                 cam_frame = f'cam_{entity_id}'
                 final_frame = None
                 if entity_id == 3:
-                    final_frame = f'{self.team_id}_fertiliser_can'
+                    final_frame = f'{self.team_id}_fertilizer_1'
                 elif entity_id == 6:
                     final_frame = f'{self.team_id}_ebot_{entity_id}'
                 else:

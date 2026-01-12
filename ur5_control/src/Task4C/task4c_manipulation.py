@@ -44,10 +44,12 @@ class ArmController(Node):
         self.current_position = None
         self.current_orientation = None 
         self.current_rotation_matrix = None
-        self.flag_fruit=0
+        self.flag_fruit = 0
+        self.flag_fertilizer_drop = 0
 
         self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
         self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group=self.callback_group)
+        self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group=self.callback_group)
 
         self.team_id = "5076"
         self.drop_pose = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
@@ -196,7 +198,7 @@ class ArmController(Node):
         self.bad_fruit_service.cancel()
         self.flag_fruit_location = False
 
-        fruit_frames = ['5076_bad_fruit_0','5076_bad_fruit_1','5076_bad_fruit_2']
+        fruit_frames = ['5076_bad_fruit_1','5076_bad_fruit_2','5076_bad_fruit_3']
         self.bad_fruits = [None] * 3
 
         while not self.flag_fruit_location:
@@ -240,7 +242,7 @@ class ArmController(Node):
         while not self.flag_target_location:
             self.rate.sleep()
             try:
-                self.fertiliser_pose = self.lookup_tf('5076_fertiliser_can')
+                self.fertiliser_pose = self.lookup_tf('5076_fertilizer_1')
                 if request.data == False:
                     self.ebot_pose = self.lookup_tf('5076_ebot_6')
                 if self.fertiliser_pose:
@@ -266,10 +268,10 @@ class ArmController(Node):
 
             self.gripper_service("detach", "fertiliser_can")
 
+            self.flag_fruit = 1
+
             response.success = True
             response.message = "Fertiliser can placed successfully"
-
-            self.flag_fruit = 1
             
         else:  # Sequence 1
 
@@ -281,16 +283,26 @@ class ArmController(Node):
             self.goal_pose_nav(self.fertiliser_pose)
             self.gripper_service("attach", "fertiliser_can")
 
+            self.flag_fertilizer_drop = 1
+
             response.success = True
             response.message = "Sequence 1 completed successfully"
 
-            self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
-            self.goal_pose_nav(self.bad_fruit_waypoint)
-
-            self.goal_pose_nav(self.drop_pose)
-            self.gripper_service("detach", "fertiliser_can")
-        
         return response
+    
+    def drop_fertilizer_callback(self):
+            
+        if self.flag_fertilizer_drop == 0:
+            return
+        self.drop_fertilizer_service.cancel()
+            
+        self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
+        self.goal_pose_nav(self.bad_fruit_waypoint)
+
+        self.goal_pose_nav(self.drop_pose)
+        self.gripper_service("detach", "fertiliser_can")
+
+        self.flag_fertilizer_drop = 0
 
 def main():
     rclpy.init()

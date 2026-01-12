@@ -52,19 +52,19 @@ class HoughLineDetector(Node):
     MAX_PENTAGON_SQUARE_LENGTH = 0.35
 
     # Triangle edge length constraints
-    TRIANGLE_L2_TARGET = 0.20  # Expected L2 length for triangle (meters)
+    TRIANGLE_L2_TARGET = 0.20     # Expected L2 length for triangle (meters)
     TRIANGLE_L2_TOLERANCE = 0.05  # L2 length tolerance (meters)
 
     # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y_SQUARE = 0.28  # 25cm offset in y-direction
-    SAFETY_OFFSET_X_SQUARE = 0.10  # 10cm offset in x-direction for Square
+    SAFETY_OFFSET_Y_SQUARE = 0.35  # 25cm offset in y-direction
+    SAFETY_OFFSET_X_SQUARE = 0.20  # 10cm offset in x-direction for Square
 
     SAFETY_OFFSET_Y_TRIANGLE = 0.60  # 25cm offset in y-direction
-    SAFETY_OFFSET_X_TRIANGLE = 0.25  # 15cm offset in x-direction for Triangle
+    SAFETY_OFFSET_X_TRIANGLE = 0.27  # 15cm offset in x-direction for Triangle
 
     # Dock station position and exclusion zone (to prevent false triangle detections)
     DOCK_STATION_POSITION = np.array([0.53, -1.95])  # World coordinates of dock station
-    DOCK_EXCLUSION_RADIUS = 1.0  # Skip triangles within 15cm of dock station
+    DOCK_EXCLUSION_RADIUS = 0.5  # Skip triangles within 15cm of dock station
 
     def __init__(self):
         super().__init__('hough_line_detector')
@@ -90,7 +90,7 @@ class HoughLineDetector(Node):
 
         # Detection tracking
         self.detected_shapes: List[ShapeDetection] = []
-        self.detection_range = 1.0  # Minimum 1m separation between shapes
+        self.detection_range = 0.3  # Minimum 1m separation between shapes
         self.pending_shape: Optional[Tuple[str, int]] = None  # (shape_status, plant_id)
 
         # Robot state
@@ -107,7 +107,7 @@ class HoughLineDetector(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # Detection flow control
+        # Detection flow control    
         self.detection_paused = False
 
         # ROS2 parameters

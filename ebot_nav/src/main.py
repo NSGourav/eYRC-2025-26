@@ -31,16 +31,17 @@ class EbotNav(Node):
         # self.triangle_counter = 0
 
         self.waypoints = [
-            (+0.40, -4.30, +1.57),      # 1st lane start
-            (+0.53, -1.95, +1.57),      # Dock Station
+            (-1.53, -6.61, 0.0),        # 1st lane start
+            (+0.40, -5.50, +1.57),      # 1st lane start
+            (+0.53, -2.00, +1.57),      # Dock Station
             (+0.40, +1.10, +1.57),      # 1st lane end
             (-1.53, +1.10, -1.57),      # 2st lane start
             (-1.53, -5.50, -1.57),      # 2st lane end
-            (-3.56, -5.50, +1.57),      # 3st lane start
-            (-3.56, +1.10, +1.57),      # 3st lane end
+            (-3.50, -5.50, +1.57),      # 3st lane start
+            (-3.50, +1.10, +1.57),      # 3st lane end
             (+0.40, +1.10, +0.00),      # 1st lane end
             (+0.40, +1.10, -1.57),      # 1st lane end
-            (+0.53, -1.95, -1.57),      # Dock Station
+            (+0.53, -2.00, -1.57),      # Dock Station
             (-1.53, -6.61, -1.57)       # Home position  
         ]
 
@@ -188,14 +189,16 @@ class EbotNav(Node):
                 self.publish_next_waypoint()
 
             else:
-                if (self.waypoint_counter == 2 or self.waypoint_counter == 10) and not self.waiting_for_pick_place:
+                if (self.waypoint_counter == 3 or self.waypoint_counter == 11) and not self.waiting_for_pick_place:
                     self.get_logger().info("Reached Dock Station. Triggering pick and place service.")
                     self.publish_dock_status("DOCK_STATION",0)
                     time.sleep(2)
-                    if self.waypoint_counter == 2:
+                    if self.waypoint_counter == 3:
                         service_data = False
-                    elif self.waypoint_counter == 10:
+                        # self.publish_next_waypoint()
+                    elif self.waypoint_counter == 11:
                         service_data = True
+                        # self.publish_next_waypoint()
                     self.call_pick_and_place_service(service_data)
                     return
                 else:

@@ -94,8 +94,8 @@ class ebotNav3B(Node):
         self.min_lidar_angle= -70.0 * pi / 180.0    # usable range of LIDAR on ebot for navigation(full range=[-135,+135])
         self.max_lidar_angle= 70.0 * pi / 180.0
 
-        self.V_MIN, self.V_MAX = 0.0, 0.324
-        self.W_MIN, self.W_MAX = -1.41, 1.41        # Increased from ±1.5 to allow faster rotation
+        self.V_MIN, self.V_MAX = 0.0, 0.3
+        self.W_MIN, self.W_MAX = -1.0, 1.0        # Increased from ±1.5 to allow faster rotation
         self.A_MIN, self.A_MAX = -1.0, 1.0
         self.AL_MIN, self.AL_MAX = -1.0, 1.0      # Increased from ±0.2 for quicker rotation changes
 
@@ -108,7 +108,7 @@ class ebotNav3B(Node):
         self.target_thresh = 0.18
         self.yaw_thresh = 0.05
 
-        self.dist_tolerance = 0.15    # if more than this, moving to target
+        self.dist_tolerance = 0.17    # if more than this, moving to target
         self.min_traj_V = 0.3  # minimal forward speed for candidate trajectories
 
         self.last_all_trajs = []

@@ -200,7 +200,7 @@ class Fert_Bad_Fruit_Detector(Node):
         # Find contours in GREEN mask (all fruits have green center)
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        fruit_id = 0
+        fruit_id = 1
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < self.min_pixel_area_fruit or area > self.max_pixel_area_fruit :

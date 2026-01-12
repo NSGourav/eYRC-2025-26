@@ -195,11 +195,11 @@ class EbotNav(Node):
                     time.sleep(2)
                     if self.waypoint_counter == 3:
                         service_data = False
-                        self.publish_next_waypoint()
+                        # self.publish_next_waypoint()
                     elif self.waypoint_counter == 11:
                         service_data = True
-                        self.publish_next_waypoint()
-                    # self.call_pick_and_place_service(service_data)
+                        # self.publish_next_waypoint()
+                    self.call_pick_and_place_service(service_data)
                     return
                 else:
                     if not self.waiting_for_pick_place:

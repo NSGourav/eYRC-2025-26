@@ -31,27 +31,25 @@ class HoughLineDetector(Node):
 
     SHAPE_STATUS_MAP = {
         "Triangle": "FERTILIZER_REQUIRED",
-        "Square": "BAD_HEALTH",
+        "Square"  : "BAD_HEALTH",
         "Pentagon": "DOCK_STATION"
     }
 
-    # Angle tolerances for shape detection (degrees)
-    TRIANGLE_INTERIOR_ANGLE = 130.0         # Interior angle for triangle detection
-    TRIANGLE_ANGLE_TOLERANCE = 10.0         # Tolerance for interior angle (degrees)
+    # Angle tolerances and length for shape detection
+    CORNER_GAP_MAX = 0.20                               # Max gap between connected lines
+    MAX_SQUARE_LENGTH = 0.26                            # Square length
 
-    # Distance thresholds
-    CORNER_GAP_MAX = 0.06                   # Max gap between connected lines
-    MAX_PENTAGON_SQUARE_LENGTH = 0.35
+    TRIANGLE_INTERIOR_ANGLE = 135.0                     # Interior angle for triangle detection
+    TRIANGLE_ANGLE_TOLERANCE = 5.0                      # Tolerance for interior angle (degrees)
+    TRIANGLE_L2_TARGET = 0.20                           # Expected L2 length for triangle (meters)
+    TRIANGLE_L2_TOLERANCE = 0.10                        # L2 length tolerance (meters)
 
-    # Triangle edge length constraints
-    TRIANGLE_L2_TARGET = 0.20               # Expected L2 length for triangle (meters)
-    TRIANGLE_L2_TOLERANCE = 0.05            # L2 length tolerance (meters)
+    # Offset for shapes
+    SAFETY_OFFSET_X_SQUARE = 0.22                       # 10cm offset in x-direction for Square
+    SAFETY_OFFSET_Y_SQUARE = 0.35                       # 25cm offset in y-direction
 
-    SAFETY_OFFSET_Y_SQUARE = 0.35           # 25cm offset in y-direction
-    SAFETY_OFFSET_X_SQUARE = 0.20           # 10cm offset in x-direction for Square
-
-    SAFETY_OFFSET_Y_TRIANGLE = 0.60         # 25cm offset in y-direction
-    SAFETY_OFFSET_X_TRIANGLE = 0.27         # 15cm offset in x-direction for Triangle
+    SAFETY_OFFSET_X_TRIANGLE = 0.32                     # 15cm offset in x-direction for Triangle
+    SAFETY_OFFSET_Y_TRIANGLE = 0.60                     # 25cm offset in y-direction
 
     # Dock station position and exclusion zone (to prevent false triangle detections)
     DOCK_STATION_POSITION = np.array([0.53, -1.95])     # World coordinates of dock station
@@ -59,6 +57,12 @@ class HoughLineDetector(Node):
 
     def __init__(self):
         super().__init__('hough_line_detector')
+
+        self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
+        self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
+
+        self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
+        self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10) 
 
         # Scan filtering parameters
         self.min_range = 0.1
@@ -81,7 +85,7 @@ class HoughLineDetector(Node):
 
         # Detection tracking
         self.detected_shapes: List[ShapeDetection] = []
-        self.detection_range = 0.3  # Minimum 1m separation between shapes
+        self.detection_range = 0.5                            # Minimum 1m separation between shapes
         self.pending_shape: Optional[Tuple[str, int]] = None  # (shape_status, plant_id)
 
         # Robot state
@@ -98,25 +102,8 @@ class HoughLineDetector(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # Detection flow control    
-        self.detection_paused = False
-
-        # ROS2 parameters
-        self.declare_parameter('enable_visualization', False)
-        self.declare_parameter('debug_mode', False)
+        self.declare_parameter('enable_visualization', True)
         self.enable_visualization = self.get_parameter('enable_visualization').value
-        self.debug_mode = self.get_parameter('debug_mode').value
-
-        # Set logging level based on debug mode
-        if self.debug_mode:
-            self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
-
-        # ROS2 communication
-        self.create_subscription(LaserScan, "/scan", self.scan_callback, 10)
-        self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
-        self.shape_pub = self.create_publisher(String, '/detection_status', 10)
-        self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
-        self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10)  # Priority navigation
 
         # Visualization setup
         if self.enable_visualization:
@@ -131,6 +118,7 @@ class HoughLineDetector(Node):
 
     def odom_callback(self, msg: Odometry):
         """Update robot position from odometry"""
+
         self.position_x = msg.pose.pose.position.x
         self.position_y = msg.pose.pose.position.y
 
@@ -143,96 +131,59 @@ class HoughLineDetector(Node):
     def scan_callback(self, msg: LaserScan):
         """Process each laser scan"""
         try:
-            if self.detection_paused:
-                return
+            # ========================================================================
+            # SCAN PROCESSING TO LINE CONVERTION
+            # ========================================================================
 
-            # Cache laser offset from TF (only done once)
-            self._cache_laser_offset(msg.header.frame_id)
-
-            # Get robot pose at scan timestamp using odometry
-            scan_position_x, scan_position_y, scan_yaw = self._get_scan_pose(msg)
-
-            # Process scan data (angle-filtered in scan_to_points)
-            all_points = self.scan_to_points(msg)
+            all_points = self.scan_to_points(msg)                                                         # Process scan data to points and filter them
             if len(all_points) < 20:
                 return
-
-            # Note: all_points already filtered by angle in scan_to_points()
-            filtered_points = self.filter_by_distance(all_points, self.max_range)
-            if len(filtered_points) < 10:
+            filtered_points = all_points[np.linalg.norm(all_points, axis=1) <= self.max_range]
+            if filtered_points.shape[0] < 10:
                 return
-
-            # Detect lines using Hough transform
-            binary_image = self.points_to_image(filtered_points)
-            raw_lines = self.detect_lines(binary_image)
-            self.get_logger().debug(f'[DETECTION] Raw lines detected: {len(raw_lines)}')
-            if len(raw_lines) == 0:
-                return
-
-            # Separate lines by valid angles
-            valid_lines, invalid_lines = self.separate_lines_by_angle(raw_lines)
-            self.get_logger().debug(
-                f'[DETECTION] Valid lines: {len(valid_lines)}, Invalid lines: {len(invalid_lines)}'
-            )
+            binary_image = self.points_to_image(filtered_points)                                          # Point to Image convertion
+            raw_lines = self.detect_lines(binary_image)                                                   # Detect lines using Hough transform
+            valid_lines, invalid_lines = self.separate_lines_by_angle(raw_lines)                          # Separate lines by valid angles
             if len(valid_lines) == 0:
                 return
+            recovered_lines = self.merge_invalid_to_valid_lines(valid_lines, invalid_lines)               # Merge invalid-angle lines to nearby valid-angle lines if collinear
+            merged_lines = self.merge_collinear_lines(recovered_lines)                                    # Merge collinear/similar lines
+            line_groups = self.group_by_proximity(merged_lines, 0.15)                                     # Group nearby lines 
+            best_group = self.find_best_group(line_groups)                                                # Select best line groups based on scoring
 
-            # Merge invalid-angle lines to nearby valid-angle lines if collinear
-            recovered_lines = self.merge_invalid_to_valid_lines(valid_lines, invalid_lines)
-            self.get_logger().debug(f'[DETECTION] After recovery: {len(recovered_lines)} lines')
+            # if not best_group:
+            #     self.visualize(filtered_points, binary_image, merged_lines, shape_type ='No Shape', shape_position=None)
+            #     return
 
-            # Merge collinear/similar lines
-            merged_lines = self.merge_collinear_lines(recovered_lines)
-            self.get_logger().debug(f'[DETECTION] After merging: {len(merged_lines)} lines')
+            # ========================================================================
+            # SHAPE DETECTION AND LOCATION CALCULATION
+            # ========================================================================
 
-            # Group nearby lines and find best shape candidate
-            line_groups = self.group_by_proximity(merged_lines, 0.15)
-            self.get_logger().debug(f'[DETECTION] Line groups: {len(line_groups)}, sizes: {[len(g) for g in line_groups]}')
-            best_group = self._find_best_group(line_groups)
-
-            if not best_group:
-                self.get_logger().debug('[DETECTION] No valid line group found')
-                self.visualize(filtered_points, binary_image, merged_lines,
-                             shape_type='No Shape', shape_position=None)
-                return
-
-            self.get_logger().debug(f'[DETECTION] Best group has {len(best_group)} lines')
+            self.cache_laser_offset(msg.header.frame_id)                                                 # Cache laser offset from TF (only done once)
+            bot_position_x, bot_position_y, bot_yaw =  self.position_x,  self.position_y,  self.yaw         
 
             # Determine shape type and position
             shape_type = self.detect_shape(best_group)
-            self.get_logger().debug(f'[DETECTION] Shape detected: {shape_type}')
-
-            shape_position = self._calculate_shape_position(best_group, shape_type)
+            shape_position = self.calculate_shape_position(best_group, shape_type)
             shape_distance = np.linalg.norm(shape_position)
 
             # Process valid detections
             if shape_type in ['Pentagon', 'Square', 'Triangle']:
-
-                is_new, world_pos = self.is_new_detection(
-                    shape_position, scan_position_x, scan_position_y, scan_yaw
-                )
+                is_new, world_pos = self.is_new_detection(shape_position, bot_position_x, bot_position_y, bot_yaw)
 
                 # Skip triangles near dock station (within 15cm) - likely false positives
                 if shape_type == 'Triangle':
                     distance_to_dock = np.linalg.norm(world_pos - self.DOCK_STATION_POSITION)
                     if distance_to_dock < self.DOCK_EXCLUSION_RADIUS:
-                        self.get_logger().debug(
-                            f'[DOCK FILTER] Triangle at ({world_pos[0]:.2f}, {world_pos[1]:.2f}) '
-                            f'is {distance_to_dock*100:.1f}cm from dock station '
-                            f'(< {self.DOCK_EXCLUSION_RADIUS*100:.0f}cm) - SKIPPING'
-                        )
                         return
 
                 if is_new:
-                    plant_id = self.assign_plant_id(world_pos, scan_position_x, scan_position_y)
+                    plant_id = self.assign_plant_id(world_pos)
                     shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
 
                     # Calculate goal position with safety offset for navigation/visualization
                     if shape_type in ['Square', 'Triangle']:
-                        goal_world_pos = self.local_to_world(
-                            shape_position, scan_position_x, scan_position_y, scan_yaw,
-                            apply_safety=True, shape_type=shape_type
-                        )
+                        goal_world_pos = self.local_to_world(shape_position, bot_position_x, bot_position_y, bot_yaw, apply_safety=True, shape_type=shape_type)
                     else:
                         # Pentagon (dock) - no offset needed
                         goal_world_pos = world_pos
@@ -248,7 +199,6 @@ class HoughLineDetector(Node):
                     )
                     self.detected_shapes.append(detection)
 
-                    # Log detection
                     self.get_logger().info(
                         f'✓ {shape_type} detected | Plant ID: {plant_id} | '
                         f'World: ({world_pos[0]:.2f}, {world_pos[1]:.2f}) | '
@@ -258,19 +208,16 @@ class HoughLineDetector(Node):
                     # Publish shape pose for priority navigation (Square and Triangle only)
                     if shape_type in ['Square', 'Triangle']:
                         pose_msg = String()
-                        pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f}"
+                        pose_msg.data = f"{shape_type},{goal_world_pos[0]:.3f},{goal_world_pos[1]:.3f},{plant_id}"
                         self.shape_pose_pub.publish(pose_msg)
                         self.pending_shape = (shape_status, plant_id)
 
                     # Publish updated markers to RViz
                     self.publish_shape_markers()
-                else:
-                    self.get_logger().debug(
-                        f'Duplicate {shape_type} ignored at ({world_pos[0]:.2f}, {world_pos[1]:.2f})'
-                    )
-                    shape_type = f'{shape_type} (Duplicate)'
+                    self.visualize(filtered_points, binary_image, best_group, shape_type, shape_position)
 
-            self.visualize(filtered_points, binary_image, best_group, shape_type, shape_position)
+                else:
+                    shape_type = f'{shape_type} (Duplicate)'
 
         except Exception as e:
             self.get_logger().error(f"Error in scan_callback: {str(e)}")
@@ -278,29 +225,37 @@ class HoughLineDetector(Node):
             self.get_logger().error(traceback.format_exc())
 
     # ========================================================================
-    # SCAN PROCESSING METHODS
+    # SCAN PROCESSING FUNCTIONS
     # ========================================================================
 
-    def filter_by_distance(self, points: np.ndarray, max_dist: float) -> np.ndarray:
-        """Filter points by maximum distance"""
-        return points[np.linalg.norm(points, axis=1) <= max_dist]
-
     def scan_to_points(self, msg: LaserScan) -> np.ndarray:
+        
         """Convert laser scan to 2D points, filtering by angle and position"""
-        ranges = np.array(msg.ranges, dtype=float)
-        ranges[np.isnan(ranges) | np.isinf(ranges)] = self.max_range + 1
-        filtered = self.median_filter(ranges)
 
-        # Angle range for valid scan rays (in radians)
-        # Keep rays from -90° to +90° (left and right sides)
+        ranges = np.array(msg.ranges, dtype = float)
+        ranges[np.isnan(ranges) | np.isinf(ranges)] = self.max_range + 1
+
+        def median_filter(data: np.ndarray) -> np.ndarray:
+            """Apply median filter to range data"""
+            filtered = np.copy(data)
+            half = self.median_filter_size // 2
+            for i in range(len(data)):
+                window = data[max(0, i-half):min(len(data), i+half+1)]
+                valid = window[window <= self.max_range]
+                if len(valid) > 0:
+                    filtered[i] = np.median(valid)
+            return filtered
+
+        filtered = median_filter(ranges)
+
         MIN_SCAN_ANGLE = -np.pi / 2  # -90 degrees
         MAX_SCAN_ANGLE = np.pi / 2   # +90 degrees
 
-        # Position limits to stay within lane (reject points outside lane boundaries)
-        MAX_FORWARD_DISTANCE = 2.0  # Max X distance (2m forward)
-        MIN_FORWARD_DISTANCE = 0.1  # Min X distance (10cm, ignore very close)
-        MAX_LATERAL_DISTANCE = 1.8  # Max |Y| distance (1.8m left/right)
-        MIN_LATERAL_DISTANCE = 0.1  # Min |Y| distance (10cm, ignore center)
+        # Position limits to stay within lane
+        MAX_FORWARD_DISTANCE = 2.0  # Max X distance
+        MIN_FORWARD_DISTANCE = 0.1  # Min X distance
+        MAX_LATERAL_DISTANCE = 1.8  # Max |Y| distance
+        MIN_LATERAL_DISTANCE = 0.1  # Min |Y| distance 
 
         points = []
         for i, r in enumerate(filtered):
@@ -312,26 +267,11 @@ class HoughLineDetector(Node):
                     x = r * np.cos(angle)
                     y = r * np.sin(angle)
 
-                    # Additional filtering by position (X and Y coordinates)
-                    # Reject points outside lane boundaries
-                    if (MIN_FORWARD_DISTANCE <= x <= MAX_FORWARD_DISTANCE and
-                        MIN_LATERAL_DISTANCE <= abs(y) <= MAX_LATERAL_DISTANCE):
+                    # Filtering by position (X and Y coordinates)
+                    if (MIN_FORWARD_DISTANCE <= x <= MAX_FORWARD_DISTANCE and MIN_LATERAL_DISTANCE <= abs(y) <= MAX_LATERAL_DISTANCE):
                         points.append([x, y])
 
         return np.array(points) if points else np.array([]).reshape(0, 2)
-
-    def median_filter(self, data: np.ndarray) -> np.ndarray:
-        """Apply median filter to range data"""
-        filtered = np.copy(data)
-        half = self.median_filter_size // 2
-
-        for i in range(len(data)):
-            window = data[max(0, i-half):min(len(data), i+half+1)]
-            valid = window[window <= self.max_range]
-            if len(valid) > 0:
-                filtered[i] = np.median(valid)
-
-        return filtered
 
     def points_to_image(self, points: np.ndarray) -> np.ndarray:
 
@@ -401,7 +341,6 @@ class HoughLineDetector(Node):
             (valid_lines if is_valid else invalid_lines).append(line)
             angle_log.append(f"{angle_deg:.1f}°{'✓' if is_valid else '✗'}")
 
-        self.get_logger().debug(f'[ANGLES] Detected angles: {", ".join(angle_log)}')
         return valid_lines, invalid_lines
 
     def merge_invalid_to_valid_lines(self, valid_lines: List[Dict], invalid_lines: List[Dict]) -> List[Dict]:
@@ -461,6 +400,86 @@ class HoughLineDetector(Node):
 
     def merge_collinear_lines(self, lines: List[Dict]) -> List[Dict]:
         """Merge collinear and nearby lines - improved with noise filtering and overlap removal"""
+
+        def should_merge_conservative(line1: Dict, line2: Dict, angle_tol: float, endpoint_dist_tol: float, perp_tol: float) -> bool:
+            """Check if two lines should be merged"""
+            dir1, _ = self.normalize_dir(line1)
+            dir2, _ = self.normalize_dir(line2)
+            if dir1 is None or dir2 is None:
+                return False
+
+            # Quick angle check
+            if np.degrees(np.arccos(np.clip(np.abs(np.dot(dir1, dir2)), 0, 1))) > angle_tol:
+                return False
+
+            # Check center distance
+            mid1 = (line1['start'] + line1['end']) * 0.5
+            mid2 = (line2['start'] + line2['end']) * 0.5
+            if np.linalg.norm(mid1 - mid2) > 0.50:  # Increased from 0.35 to 0.50 (50cm)
+                return False
+
+            # Check endpoint proximity
+            eps1 = np.array([line1['start'], line1['end']])
+            eps2 = np.array([line2['start'], line2['end']])
+            dists = np.linalg.norm(eps1[:, None] - eps2[None, :], axis=2)
+            if dists.min() > endpoint_dist_tol:
+                return False
+
+            # Check collinearity
+            to_mid = mid2 - line1['start']
+            return np.linalg.norm(to_mid - np.dot(to_mid, dir1) * dir1) < perp_tol
+
+        def merge_line_group(group: List[Dict]) -> Dict:
+            """Merge a group of lines by finding furthest endpoints"""
+            all_points = np.array([[l['start'], l['end']] for l in group]).reshape(-1, 2)
+            dists = np.linalg.norm(all_points[:, None] - all_points[None, :], axis=2)
+            i, j = np.unravel_index(dists.argmax(), dists.shape)
+
+            return {
+                'start': all_points[i],
+                'end': all_points[j],
+                'length': dists[i, j]
+            }
+
+        def check_overlap(line1: Dict, line2: Dict) -> bool:
+            """Check if two lines overlap (for duplicate removal)"""
+            dir1, len1 = self.normalize_dir(line1)
+            dir2, len2 = self.normalize_dir(line2)
+
+            if dir1 is None or dir2 is None:
+                return False
+
+            # Check if lines are parallel
+            if np.abs(np.dot(dir1, dir2)) < 0.95:
+                return False
+
+            # Check perpendicular distance (collinearity)
+            mid1 = (line1['start'] + line1['end']) / 2
+            mid2 = (line2['start'] + line2['end']) / 2
+            mid_vec = mid2 - mid1
+            perp_dist = np.linalg.norm(mid_vec - np.dot(mid_vec, dir1) * dir1)
+
+            if perp_dist < 0.03:  # Within 3cm perpendicular distance
+                # Check projection overlap on the line
+                ref = line1['start']
+                projs = [
+                    np.dot(line1['start'] - ref, dir1), np.dot(line1['end'] - ref, dir1),
+                    np.dot(line2['start'] - ref, dir1), np.dot(line2['end'] - ref, dir1)
+                ]
+                min1, max1 = min(projs[0], projs[1]), max(projs[0], projs[1])
+                min2, max2 = min(projs[2], projs[3]), max(projs[2], projs[3])
+
+                # Check if projections overlap
+                if min(max1, max2) - max(min1, min2) > 0.02:  # 2cm overlap
+                    return True
+
+            # Check if many endpoints are close (alternative overlap detection)
+            eps1 = [line1['start'], line1['end']]
+            eps2 = [line2['start'], line2['end']]
+            close_count = sum(1 for p1 in eps1 for p2 in eps2 if np.linalg.norm(p1 - p2) < 0.05)
+
+            return close_count >= 3
+
         initial_count = len(lines)
         if len(lines) <= 1:
             return lines
@@ -497,17 +516,14 @@ class HoughLineDetector(Node):
 
                     # Check if line2 should be merged with any line in the group
                     for group_line in group:
-                        if self.should_merge_conservative(group_line, line2, angle_tolerance,
-                                                          endpoint_distance, perpendicular_tolerance):
+                        if should_merge_conservative(group_line, line2, angle_tolerance, endpoint_distance, perpendicular_tolerance):
                             group.append(line2)
                             used.add(j)
                             changed = True
                             break
 
             # Merge the group into a single line
-            merged_line = self.merge_line_group(group)
-            if len(group) > 1:
-                self.get_logger().debug(f'[MERGE] Merged {len(group)} fragments into one line')
+            merged_line = merge_line_group(group)
             merged.append(merged_line)
 
         # Step 3: Remove overlapping lines (keep longer ones)
@@ -515,380 +531,10 @@ class HoughLineDetector(Node):
         filtered = []
 
         for line in sorted_lines:
-            if not any(self.check_overlap(line, kept) for kept in filtered):
+            if not any(check_overlap(line, kept) for kept in filtered):
                 filtered.append(line)
 
-        # Log merging statistics
-        self.get_logger().debug(
-            f'[MERGE] Line merging: {initial_count} → {after_filter} (after noise filter) → '
-            f'{len(merged)} (after merge) → {len(filtered)} (after overlap removal)'
-        )
-
         return filtered
-
-    def should_merge_conservative(self, line1: Dict, line2: Dict, angle_tol: float,
-                                  endpoint_dist_tol: float, perp_tol: float) -> bool:
-        """Check if two lines should be merged"""
-        dir1, _ = self.normalize_dir(line1)
-        dir2, _ = self.normalize_dir(line2)
-        if dir1 is None or dir2 is None:
-            return False
-
-        # Quick angle check
-        if np.degrees(np.arccos(np.clip(np.abs(np.dot(dir1, dir2)), 0, 1))) > angle_tol:
-            return False
-
-        # Check center distance
-        mid1 = (line1['start'] + line1['end']) * 0.5
-        mid2 = (line2['start'] + line2['end']) * 0.5
-        if np.linalg.norm(mid1 - mid2) > 0.50:  # Increased from 0.35 to 0.50 (50cm)
-            return False
-
-        # Check endpoint proximity
-        eps1 = np.array([line1['start'], line1['end']])
-        eps2 = np.array([line2['start'], line2['end']])
-        dists = np.linalg.norm(eps1[:, None] - eps2[None, :], axis=2)
-        if dists.min() > endpoint_dist_tol:
-            return False
-
-        # Check collinearity
-        to_mid = mid2 - line1['start']
-        return np.linalg.norm(to_mid - np.dot(to_mid, dir1) * dir1) < perp_tol
-
-    def merge_line_group(self, group: List[Dict]) -> Dict:
-        """Merge a group of lines by finding furthest endpoints"""
-        all_points = np.array([[l['start'], l['end']] for l in group]).reshape(-1, 2)
-        dists = np.linalg.norm(all_points[:, None] - all_points[None, :], axis=2)
-        i, j = np.unravel_index(dists.argmax(), dists.shape)
-
-        return {
-            'start': all_points[i],
-            'end': all_points[j],
-            'length': dists[i, j]
-        }
-
-    def normalize_dir(self, line: Dict) -> Tuple[Optional[np.ndarray], float]:
-        """Get normalized direction vector"""
-        d = line['end'] - line['start']
-        length = np.linalg.norm(d)
-        return (d/length, length) if length > 1e-6 else (None, length)
-
-    def check_overlap(self, line1: Dict, line2: Dict) -> bool:
-        """Check if two lines overlap (for duplicate removal)"""
-        dir1, len1 = self.normalize_dir(line1)
-        dir2, len2 = self.normalize_dir(line2)
-
-        if dir1 is None or dir2 is None:
-            return False
-
-        # Check if lines are parallel
-        if np.abs(np.dot(dir1, dir2)) < 0.95:
-            return False
-
-        # Check perpendicular distance (collinearity)
-        mid1 = (line1['start'] + line1['end']) / 2
-        mid2 = (line2['start'] + line2['end']) / 2
-        mid_vec = mid2 - mid1
-        perp_dist = np.linalg.norm(mid_vec - np.dot(mid_vec, dir1) * dir1)
-
-        if perp_dist < 0.03:  # Within 3cm perpendicular distance
-            # Check projection overlap on the line
-            ref = line1['start']
-            projs = [
-                np.dot(line1['start'] - ref, dir1), np.dot(line1['end'] - ref, dir1),
-                np.dot(line2['start'] - ref, dir1), np.dot(line2['end'] - ref, dir1)
-            ]
-            min1, max1 = min(projs[0], projs[1]), max(projs[0], projs[1])
-            min2, max2 = min(projs[2], projs[3]), max(projs[2], projs[3])
-
-            # Check if projections overlap
-            if min(max1, max2) - max(min1, min2) > 0.02:  # 2cm overlap
-                return True
-
-        # Check if many endpoints are close (alternative overlap detection)
-        eps1 = [line1['start'], line1['end']]
-        eps2 = [line2['start'], line2['end']]
-        close_count = sum(1 for p1 in eps1 for p2 in eps2 if np.linalg.norm(p1 - p2) < 0.05)
-
-        return close_count >= 3
-
-    def calc_angle(self, line1: Dict, line2: Dict) -> float:
-        """Calculate angle between two lines in degrees"""
-        dir1, _ = self.normalize_dir(line1)
-        dir2, _ = self.normalize_dir(line2)
-        if dir1 is None or dir2 is None:
-            return 0.0
-        return np.degrees(np.arccos(np.clip(np.abs(np.dot(dir1, dir2)), -1.0, 1.0)))
-
-    def order_lines(self, lines: List[Dict]) -> List[Dict]:
-        """Order lines by connectivity"""
-        if len(lines) <= 2:
-            return lines
-
-        ordered = [lines[0]]
-        remaining = set(range(1, len(lines)))
-
-        while remaining:
-            last = ordered[-1]
-            best_idx = None
-            best_dist = float('inf')
-
-            for idx in remaining:
-                distances = [
-                    np.linalg.norm(last['end'] - lines[idx]['start']),
-                    np.linalg.norm(last['end'] - lines[idx]['end']),
-                    np.linalg.norm(last['start'] - lines[idx]['start']),
-                    np.linalg.norm(last['start'] - lines[idx]['end'])
-                ]
-
-                min_dist = min(distances)
-                if min_dist < best_dist:
-                    best_dist = min_dist
-                    best_idx = idx
-
-            if best_idx is None or best_dist > 0.20:
-                break
-
-            ordered.append(lines[best_idx])
-            remaining.remove(best_idx)
-
-        return ordered
-
-    # ========================================================================
-    # SHAPE DETECTION METHODS
-    # ========================================================================
-
-    def _cache_laser_offset(self, scan_frame: str):
-        """Cache the static transform from base_link to laser scanner (only called once)"""
-        if self.laser_offset_cached:
-            return
-
-        try:
-            # Get static transform from base_link to laser frame
-            transform = self.tf_buffer.lookup_transform(
-                'ebot_base_link',
-                scan_frame,
-                Time(),
-                timeout=Duration(seconds=1.0)
-            )
-
-            self.laser_offset_x = transform.transform.translation.x
-            self.laser_offset_y = transform.transform.translation.y
-            self.laser_offset_cached = True
-
-            self.get_logger().info(
-                f'Laser offset cached: x={self.laser_offset_x:.3f}m, y={self.laser_offset_y:.3f}m '
-                f'(from {scan_frame} to ebot_base_link)'
-            )
-
-        except TransformException as ex:
-            self.get_logger().warn(f'Could not get laser offset, assuming 0: {ex}', throttle_duration_sec=5.0)
-            self.laser_offset_x = 0.0
-            self.laser_offset_y = 0.0
-            # Don't set cached=True, will retry next time
-
-    def _get_scan_pose(self, msg: LaserScan) -> Tuple[float, float, float]:
-        """Get robot pose - using odometry for consistency"""
-        # Use current odometry directly - more reliable than TF for this application
-        return self.position_x, self.position_y, self.yaw
-
-    def _find_best_group(self, line_groups: List[List[Dict]]) -> Optional[List[Dict]]:
-        """Find the best line group based on scoring"""
-        best_group = None
-        best_score = -1
-
-        for group in line_groups:
-            score = self.score_group(group)
-            if score > best_score:
-                best_score = score
-                best_group = group
-
-        return best_group
-
-    def _calculate_shape_position(self, lines: List[Dict], shape_type: str) -> np.ndarray:
-        """Calculate shape position based on type"""
-        if shape_type == 'Triangle':
-            if len(lines) == 2:
-                return self.compute_corner(lines[0], lines[1])
-            elif len(lines) >= 4:
-                return self.compute_corner(lines[1], lines[2])
-        elif shape_type == 'Square' and len(lines) >= 3:
-            return self.compute_corner(lines[1], lines[2])
-
-        # Default: centroid
-        all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
-        return np.mean(all_endpoints, axis=0)
-
-    def detect_shape(self, lines: List[Dict]) -> Optional[str]:
-        """Detect shape type from line segments"""
-        lengths = [l['length'] for l in lines]
-        self.get_logger().debug(
-            f'[SHAPE] Analyzing {len(lines)} lines, lengths: {[f"{l:.3f}m" for l in lengths]}'
-        )
-
-        # Check 3-line shapes first (Pentagon/Square)
-        if len(lines) == 3:
-            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(2)]
-            gaps = [np.linalg.norm(lines[i]['end'] - lines[i+1]['start']) for i in range(2)]
-
-            self.get_logger().debug(
-                f'[SHAPE] 3-line group: angles={[f"{a:.1f}°" for a in angles]}, '
-                f'gaps={[f"{g:.3f}m" for g in gaps]}'
-            )
-
-            # Pentagon: 90° and 140° angles
-            if (abs(angles[0] - 90) < 7 and abs(angles[1] - 140) < 7 and
-                all(g < self.CORNER_GAP_MAX for g in gaps)):
-                self.get_logger().info('✓ Pentagon detected')
-                return 'Pentagon'
-
-            # Square: all 90° angles
-            if (all(abs(a - 90) < 10 for a in angles) and
-                all(g < self.CORNER_GAP_MAX for g in gaps) and
-                lines[1]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH and
-                lines[2]['length'] < self.MAX_PENTAGON_SQUARE_LENGTH):
-                self.get_logger().info('✓ Square detected')
-                return 'Square'
-
-        # Triangle: Check consecutive line pairs
-        if len(lines) >= 2:
-            if self.detect_triangle_pattern(lines):
-                return 'Triangle'
-
-        self.get_logger().debug('[SHAPE] No shape detected')
-        return None
-
-    def detect_triangle_pattern(self, lines: List[Dict]) -> bool:
-        """Detect triangle from consecutive line pairs: ~45° angle, L2 ~20cm"""
-        self.get_logger().debug(f'[TRIANGLE] Checking {len(lines)} lines for triangle pattern')
-
-        for i in range(len(lines) - 1):
-            angle_inv = 180 - self.calc_angle(lines[i], lines[i + 1])
-            corner_gap = np.linalg.norm(lines[i]['end'] - lines[i + 1]['start'])
-            L1 = lines[i]['length']
-            L2 = lines[i + 1]['length']
-
-            # Calculate deviations from expected values
-            angle_diff = abs(angle_inv - self.TRIANGLE_INTERIOR_ANGLE)
-            length_diff = abs(L2 - self.TRIANGLE_L2_TARGET)
-
-            # Check each condition
-            angle_ok = angle_diff < self.TRIANGLE_ANGLE_TOLERANCE
-            length_ok = length_diff < self.TRIANGLE_L2_TOLERANCE
-            gap_ok = corner_gap < self.CORNER_GAP_MAX
-
-            self.get_logger().debug(
-                f'[TRIANGLE] Pair {i}-{i+1}: '
-                f'angle={angle_inv:.1f}° (target={self.TRIANGLE_INTERIOR_ANGLE}°, diff={angle_diff:.1f}°, {"✓" if angle_ok else "✗"}), '
-                f'L1={L1:.3f}m, L2={L2:.3f}m (target={self.TRIANGLE_L2_TARGET}m, diff={length_diff:.3f}m, {"✓" if length_ok else "✗"}), '
-                f'gap={corner_gap:.3f}m (max={self.CORNER_GAP_MAX}m, {"✓" if gap_ok else "✗"})'
-            )
-
-            if angle_ok and length_ok and gap_ok:
-                self.get_logger().info(
-                    f'✓ Triangle detected: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m'
-                )
-                return True
-
-        self.get_logger().debug('[TRIANGLE] No valid triangle pattern found')
-        return False
-
-    def assign_plant_id(self, actual_pos):
-        plant_location = {
-            1: np.array([-0.52, -4.10]),
-            2: np.array([-0.52, -2.75]),
-            3: np.array([-0.52, -1.40]),
-            4: np.array([-0.52, -0.05]),
-            5: np.array([-2.40, -4.10]),
-            6: np.array([-2.40, -2.75]),
-            7: np.array([-2.40, -1.40]),
-            8: np.array([-2.40, -0.05])
-        }
-
-        min_dist = float('inf')
-        closest_id = None
-
-        for plant_id, pos in plant_location.items():
-            dist = np.linalg.norm(actual_pos - pos)
-
-            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
-                min_dist = dist
-                closest_id = plant_id
-
-        return closest_id
-
-    def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
-        """Apply safety offset to shape position to prevent collision
-
-        Y-offset: Shifts goal toward robot's centerline by SAFETY_OFFSET_Y
-        X-offset: For Square only, push forward by SAFETY_OFFSET_X_SQUARE
-        """
-        if shape_type == 'Square':
-            offset_x = self.SAFETY_OFFSET_X_SQUARE
-            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_SQUARE if local_pos[1] != 0 else 0.0
-
-        elif shape_type == 'Triangle':
-            offset_x = self.SAFETY_OFFSET_X_TRIANGLE
-            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_TRIANGLE if local_pos[1] != 0 else 0.0       
-
-        adjusted_pos = np.array([local_pos[0] + offset_x, local_pos[1] + offset_y])
-        return adjusted_pos
-
-    def local_to_world(self, local_pos: np.ndarray, robot_x: float = None,
-                      robot_y: float = None, robot_yaw: float = None,
-                      apply_safety: bool = False, shape_type: str = None) -> np.ndarray:
-        """Convert local laser frame coordinates to world coordinates"""
-        robot_x = robot_x if robot_x is not None else self.position_x
-        robot_y = robot_y if robot_y is not None else self.position_y
-        robot_yaw = robot_yaw if robot_yaw is not None else self.yaw
-
-        # Make a copy to avoid mutating the original
-        local_pos = np.copy(local_pos)
-
-        # Apply safety offset if requested (for navigation goals)
-        if apply_safety:
-            local_pos = self.apply_safety_offset(local_pos, shape_type=shape_type)
-
-        # Step 1: Transform from laser frame to base_link frame
-        base_link_x = local_pos[0] + self.laser_offset_x
-        base_link_y = local_pos[1] + self.laser_offset_y
-
-        # Step 2: Transform from base_link frame to world frame
-        cos_yaw = math.cos(robot_yaw)
-        sin_yaw = math.sin(robot_yaw)
-
-        world_x = robot_x + (base_link_x * cos_yaw - base_link_y * sin_yaw)
-        world_y = robot_y + (base_link_x * sin_yaw + base_link_y * cos_yaw)
-
-        return np.array([world_x, world_y])
-
-    def compute_corner(self, line1: Dict, line2: Dict) -> np.ndarray:
-        """Compute intersection point (corner) of two connected lines"""
-        endpoints1 = [line1['start'], line1['end']]
-        endpoints2 = [line2['start'], line2['end']]
-
-        min_dist = float('inf')
-        corner = None
-
-        for p1 in endpoints1:
-            for p2 in endpoints2:
-                d = np.linalg.norm(p1 - p2)
-                if d < min_dist:
-                    min_dist = d
-                    corner = (p1 + p2) / 2
-
-        return corner
-
-    def is_new_detection(self, local_position: np.ndarray, robot_x: float = None,
-                        robot_y: float = None, robot_yaw: float = None) -> Tuple[bool, np.ndarray]:
-        """Check if shape at local position is new based on world coordinates"""
-        world_position = self.local_to_world(local_position, robot_x, robot_y, robot_yaw)
-
-        for detected in self.detected_shapes:
-            if np.linalg.norm(world_position - detected.world_position) < self.detection_range:
-                return False, world_position
-
-        return True, world_position
 
     def group_by_proximity(self, lines: List[Dict], threshold: float) -> List[List[Dict]]:
         """Group lines that are close to each other"""
@@ -927,26 +573,239 @@ class HoughLineDetector(Node):
             groups.append(group)
         return groups
 
-    def score_group(self, lines: List[Dict]) -> float:
-        """Score a line group based on quality metrics"""
-        if not lines:
-            return 0
+    def find_best_group(self, line_groups: List[List[Dict]]) -> Optional[List[Dict]]:
+        """Find the best line group based on scoring"""
+        best_group = None
+        best_score = -1
 
-        n = len(lines)
-        score = 10.0 if 2 <= n <= 4 else (2.0 if n == 1 else 1.0)
+        def score_group(lines: List[Dict]) -> float:
+            """Score a line group based on quality metrics"""
+            if not lines:
+                return 0
 
-        all_pts = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
-        bbox_size = np.linalg.norm(all_pts.ptp(axis=0))
+            n = len(lines)
+            score = 10.0 if 2 <= n <= 4 else (2.0 if n == 1 else 1.0)
+            all_pts = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
+            bbox_size = np.linalg.norm(all_pts.ptp(axis=0))
 
-        if 0.15 < bbox_size < 0.8:
-            score += 5.0 / (bbox_size + 0.1)
+            if 0.15 < bbox_size < 0.8:
+                score += 5.0 / (bbox_size + 0.1)
+            if np.mean([l['length'] for l in lines]) < 0.3:
+                score += 5.0
+            score += max(0, 5.0 - np.linalg.norm(all_pts.mean(axis=0)))
 
-        if np.mean([l['length'] for l in lines]) < 0.3:
-            score += 5.0
+            return score
 
-        score += max(0, 5.0 - np.linalg.norm(all_pts.mean(axis=0)))
+        for group in line_groups:
+            score = score_group(group)
+            if score > best_score:
+                best_score = score
+                best_group = group
 
-        return score
+        return best_group
+
+    def normalize_dir(self, line: Dict) -> Tuple[Optional[np.ndarray], float]:
+        """Get normalized direction vector"""
+        d = line['end'] - line['start']
+        length = np.linalg.norm(d)
+        return (d/length, length) if length > 1e-6 else (None, length)
+
+    # ========================================================================
+    # SHAPE DETECTION FUNCTIONS
+    # ========================================================================
+
+    def cache_laser_offset(self, scan_frame: str):
+        """Cache the static transform from base_link to laser scanner (only called once)"""
+        if self.laser_offset_cached:
+            return
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'ebot_base_link',
+                scan_frame,
+                Time(),
+                timeout=Duration(seconds=1.0)
+            )
+            self.laser_offset_x = transform.transform.translation.x
+            self.laser_offset_y = transform.transform.translation.y
+            self.laser_offset_cached = True
+            self.get_logger().info(f'Laser offset cached: x={self.laser_offset_x:.3f}m, y={self.laser_offset_y:.3f}m 'f'(from {scan_frame} to ebot_base_link)')
+
+        except TransformException as ex:
+            self.get_logger().warn(f'Could not get laser offset, assuming 0: {ex}', throttle_duration_sec=5.0)
+            self.laser_offset_x = 0.0
+            self.laser_offset_y = 0.0
+            # Don't set cached=True, will retry next time
+
+    def calc_angle(self, line1: Dict, line2: Dict) -> float:
+        """Calculate angle between two lines in degrees"""
+        dir1, _ = self.normalize_dir(line1)
+        dir2, _ = self.normalize_dir(line2)
+        if dir1 is None or dir2 is None:
+            return 0.0
+        return np.degrees(np.arccos(np.clip(np.abs(np.dot(dir1, dir2)), -1.0, 1.0)))
+
+    def detect_shape(self, lines: List[Dict]) -> Optional[str]:
+        """Detect shape type from line segments"""
+
+        # Check 3-line shapes first (Pentagon/Square)
+        if len(lines) == 3:
+            angles = [180 - self.calc_angle(lines[i], lines[i+1]) for i in range(2)]
+            gaps = [np.linalg.norm(lines[i]['end'] - lines[i+1]['start']) for i in range(2)]
+
+            # Square: all 90° angles
+            if (all(abs(a - 90) < 10 for a in angles) and
+                all(g < self.CORNER_GAP_MAX for g in gaps) and
+                lines[1]['length'] < self.MAX_SQUARE_LENGTH and
+                lines[2]['length'] < self.MAX_SQUARE_LENGTH):
+                self.get_logger().info('✓ Square detected')
+                return 'Square'
+            if (all(abs(a - 90) < 10 for a in angles) and
+                lines[1]['length'] < self.MAX_SQUARE_LENGTH and
+                lines[2]['length'] < self.MAX_SQUARE_LENGTH):
+                self.get_logger().info(f'✓ Square detected but not published: corner_gap={gaps}')
+                return None
+
+        # Triangle: Check consecutive line pairs
+        if len(lines) == 2:
+            for i in range(len(lines) - 1):
+                angle_inv = 180 - self.calc_angle(lines[i], lines[i + 1])
+                corner_gap = np.linalg.norm(lines[i]['end'] - lines[i + 1]['start'])
+                L1 = lines[i]['length']
+                L2 = lines[i + 1]['length']
+
+                # Calculate deviations from expected values
+                angle_diff = abs(angle_inv - self.TRIANGLE_INTERIOR_ANGLE)
+                length_diff = abs(L2 - self.TRIANGLE_L2_TARGET)
+
+                # Check each condition
+                angle_ok = angle_diff < self.TRIANGLE_ANGLE_TOLERANCE
+                length_ok = length_diff < self.TRIANGLE_L2_TOLERANCE
+                gap_ok = corner_gap < self.CORNER_GAP_MAX
+
+                if angle_ok and length_ok and gap_ok:
+                    self.get_logger().info(f'✓ Triangle detected: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
+                    return 'Triangle'
+                elif angle_inv >= 120 and angle_inv <= 150:
+                    self.get_logger().info(f'✓ Not Triangle: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')                
+        return None
+
+    def calculate_shape_position(self, lines: List[Dict], shape_type: str) -> np.ndarray:
+        """Calculate shape position based on type"""
+
+        def compute_corner(line1: Dict, line2: Dict) -> np.ndarray:
+            """Compute intersection point (corner) of two connected lines"""
+            endpoints1 = [line1['start'], line1['end']]
+            endpoints2 = [line2['start'], line2['end']]
+
+            min_dist = float('inf')
+            corner = None
+
+            for p1 in endpoints1:
+                for p2 in endpoints2:
+                    d = np.linalg.norm(p1 - p2)
+                    if d < min_dist:
+                        min_dist = d
+                        corner = (p1 + p2) / 2
+
+            return corner
+    
+        if shape_type == 'Triangle':
+            if len(lines) == 2:
+                return compute_corner(lines[0], lines[1])
+            elif len(lines) == 3:
+                return compute_corner(lines[1], lines[2])
+        elif shape_type == 'Square' and len(lines) >= 3:
+            corner_01 = compute_corner(lines[0], lines[1])
+            corner_12 = compute_corner(lines[1], lines[2])
+            if abs(corner_01[1]) < abs(corner_12[1]):
+                return corner_01
+            else:
+                return corner_12
+        
+        # Default: centroid
+        all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
+        return np.mean(all_endpoints, axis=0)
+
+    def assign_plant_id(self, actual_pos):
+        plant_location = {
+            1: np.array([-0.52, -4.10]),
+            2: np.array([-0.52, -2.75]),
+            3: np.array([-0.52, -1.40]),
+            4: np.array([-0.52, -0.05]),
+            5: np.array([-2.40, -4.10]),
+            6: np.array([-2.40, -2.75]),
+            7: np.array([-2.40, -1.40]),
+            8: np.array([-2.40, -0.05])
+        }
+
+        min_dist = float('inf')
+        closest_id = None
+
+        for plant_id, pos in plant_location.items():
+            dist = np.linalg.norm(actual_pos - pos)
+
+            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
+                min_dist = dist
+                closest_id = plant_id
+
+        return closest_id
+
+    def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
+        """Apply safety offset to shape position to prevent collision
+
+        Y-offset: Shifts goal toward robot's centerline by SAFETY_OFFSET_Y
+        X-offset: For Square only, push forward by SAFETY_OFFSET_X_SQUARE
+        """
+        if shape_type == 'Square':
+            offset_x = self.SAFETY_OFFSET_X_SQUARE
+            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_SQUARE #if local_pos[1] != 0 else 0.0
+
+        elif shape_type == 'Triangle':
+            offset_x = self.SAFETY_OFFSET_X_TRIANGLE
+            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_TRIANGLE #if local_pos[1] != 0 else 0.0       
+
+        adjusted_pos = np.array([local_pos[0] + offset_x, local_pos[1] + offset_y])
+        return adjusted_pos
+
+    def local_to_world(self, local_pos: np.ndarray, robot_x: float = None,
+                      robot_y: float = None, robot_yaw: float = None,
+                      apply_safety: bool = False, shape_type: str = None) -> np.ndarray:
+        """Convert local laser frame coordinates to world coordinates"""
+        robot_x = robot_x if robot_x is not None else self.position_x
+        robot_y = robot_y if robot_y is not None else self.position_y
+        robot_yaw = robot_yaw if robot_yaw is not None else self.yaw
+
+        # Make a copy to avoid mutating the original
+        local_pos = np.copy(local_pos)
+
+        # Apply safety offset if requested (for navigation goals)
+        if apply_safety:
+            local_pos = self.apply_safety_offset(local_pos, shape_type=shape_type)
+
+        # Step 1: Transform from laser frame to base_link frame
+        base_link_x = local_pos[0] + self.laser_offset_x
+        base_link_y = local_pos[1] + self.laser_offset_y
+
+        # Step 2: Transform from base_link frame to world frame
+        cos_yaw = math.cos(robot_yaw)
+        sin_yaw = math.sin(robot_yaw)
+
+        world_x = robot_x + (base_link_x * cos_yaw - base_link_y * sin_yaw)
+        world_y = robot_y + (base_link_x * sin_yaw + base_link_y * cos_yaw)
+
+        return np.array([world_x, world_y])
+
+    def is_new_detection(self, local_position: np.ndarray, robot_x: float = None,
+                        robot_y: float = None, robot_yaw: float = None) -> Tuple[bool, np.ndarray]:
+        """Check if shape at local position is new based on world coordinates"""
+        world_position = self.local_to_world(local_position, robot_x, robot_y, robot_yaw)
+
+        for detected in self.detected_shapes:
+            if np.linalg.norm(world_position - detected.world_position) < self.detection_range:
+                return False, world_position
+
+        return True, world_position
 
     # ========================================================================
     # RVIZ MARKER PUBLISHING
@@ -1046,9 +905,8 @@ class HoughLineDetector(Node):
     # VISUALIZATION
     # ========================================================================
 
-    def visualize(self, points: np.ndarray, binary_image: np.ndarray,
-                 lines: List[Dict], shape_type: str = 'Unknown',
-                 shape_position: Optional[np.ndarray] = None):
+    def visualize(self, points: np.ndarray, binary_image: np.ndarray, lines: List[Dict],
+                   shape_type: str = 'Unknown', shape_position: Optional[np.ndarray] = None):
         """Visualize detection results - just the lines"""
         if not self.enable_visualization or self.fig is None:
             return
@@ -1071,6 +929,10 @@ class HoughLineDetector(Node):
             self.ax2.plot([line['start'][0], line['end'][0]],
                          [line['start'][1], line['end'][1]],
                          color=color, linewidth=3, alpha=0.9)
+            
+        if shape_position is not None:
+            self.ax2.scatter(shape_position[0], shape_position[1], c='black', s=120, marker='X', zorder=5)
+            self.ax2.text(shape_position[0] + 0.05, shape_position[1] + 0.05, shape_type, fontsize=10, fontweight='bold', color='black')
 
         # Set plot limits and appearance
         self.ax2.set_xlim(-0.5, 2.5)

@@ -178,7 +178,7 @@ class HoughLineDetector(Node):
                         return
 
                 if is_new:
-                    plant_id = self.assign_plant_id(world_pos)
+                    plant_id = self.assign_plant_id(world_pos,self.position_x,self.position_y)
                     shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
 
                     # Calculate goal position with safety offset for navigation/visualization
@@ -727,29 +727,63 @@ class HoughLineDetector(Node):
         all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
         return np.mean(all_endpoints, axis=0)
 
-    def assign_plant_id(self, actual_pos):
-        plant_location = {
-            1: np.array([-0.52, -4.10]),
-            2: np.array([-0.52, -2.75]),
-            3: np.array([-0.52, -1.40]),
-            4: np.array([-0.52, -0.05]),
-            5: np.array([-2.40, -4.10]),
-            6: np.array([-2.40, -2.75]),
-            7: np.array([-2.40, -1.40]),
-            8: np.array([-2.40, -0.05])
+    def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float) -> Optional[int]:
+        """
+        Assign plant_id (0-8) based on lane and segment
+
+        Simplified version - returns None if position doesn't match expected ranges.
+        For production, consider loading this from a config file.
+        """
+        # Define lane boundaries (simplified - could be config file)
+        lanes = {
+            1: {'x_range': (0.2, 0.35), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
+            2: {'x_range': (-1.45, -1.3), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
+            3: {'x_range': (-3.5, -3.35), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
         }
 
-        min_dist = float('inf')
-        closest_id = None
+        # Find current lane
+        current_lane = None
+        for lane_num, lane_data in lanes.items():
+            x_min, x_max = lane_data['x_range']
+            if x_min <= robot_x <= x_max:
+                current_lane = lane_num
+                break
 
-        for plant_id, pos in plant_location.items():
-            dist = np.linalg.norm(actual_pos - pos)
+        if current_lane is None:
+            self.get_logger().warn(f"Robot x={robot_x:.3f} not in any lane")
+            return None
 
-            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
-                min_dist = dist
-                closest_id = plant_id
+        is_left_side = shape_world_pos[0] < robot_x
 
-        return closest_id
+        # Lane 1: Dock on right, segments on left
+        if current_lane == 1:
+            if not is_left_side:
+                self.get_logger().info("Plant ID: 0 (Dock - Lane 1 Right)")
+                return 0
+            else:
+                for (y_min, y_max), plant_id in lanes[1]['left_segments']:
+                    if y_min <= robot_y <= y_max:
+                        self.get_logger().info(f"Plant ID: {plant_id} (Lane 1 Left, y:[{y_min}, {y_max}])")
+                        return plant_id
+
+        # Lane 2: Both sides
+        elif current_lane == 2:
+            segments = lanes[2]['right_segments'] if not is_left_side else lanes[2]['left_segments']
+            for (y_min, y_max), plant_id in segments:
+                if y_min <= robot_y <= y_max:
+                    side = "Right" if not is_left_side else "Left"
+                    self.get_logger().info(f"Plant ID: {plant_id} (Lane 2 {side}, y:[{y_min}, {y_max}])")
+                    return plant_id
+
+        # Lane 3: Right side only
+        elif current_lane == 3 and not is_left_side:
+            for (y_min, y_max), plant_id in lanes[3]['right_segments']:
+                if y_min <= robot_y <= y_max:
+                    self.get_logger().info(f"Plant ID: {plant_id} (Lane 3 Right, y:[{y_min}, {y_max}])")
+                    return plant_id
+
+        self.get_logger().warn(f"Could not assign plant_id - robot at ({robot_x:.3f}, {robot_y:.3f}) in Lane {current_lane}")
+        return None
 
     def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
         """Apply safety offset to shape position to prevent collision

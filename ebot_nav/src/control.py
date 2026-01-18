@@ -29,18 +29,15 @@ class EbotNav(Node):
         self.system = "SIM"
 
         self.waypoints = [
-            (-1.53, -6.61, 0.0),        # 0: 1st lane start
-            (+0.40, -5.50, +1.57),      # 1: 1st lane start
-            (+0.53, -1.90, +1.57),      # 2: Dock Station
-            (+0.40, +1.10, +1.57),      # 3: 1st lane end
-            (-1.53, +1.10, -1.57),      # 4: 2nd lane start
-            (-1.53, -5.50, -1.57),      # 5: 2nd lane end
-            (-3.50, -5.50, +1.57),      # 6: 3rd lane start
-            (-3.50, +1.10, +1.57),      # 7: 3rd lane end
-            (+0.40, +1.00, +0.00),      # 8: 1st lane end
-            (+0.40, +1.00, -1.57),      # 9: 1st lane end
-            (+0.53, -1.90, -1.57),      # 10: Dock Station
-            (-1.53, -6.61, -1.57)       # 11: Home position  
+            (0.0, 0.0, -1.57),
+            (0.7, -1.857, 0.0),           # 1st lane start
+            (2.072, -1.704, 0.0),           # Dock station
+            (4.835, -1.707, 0.0),           # 1st lane end
+            (4.495, 0.006, 3.14),           # 2nd lane start
+            (1.448, 0.072, 3.14),           # 2nd lane end
+            (1.108, 1.656, 0.0),            # 3rd lane start
+            (4.8, 1.955, 0.0),            # 3rd lane end
+            (0.0, 0.0, 3.14)               # Home
         ]
 
         self.waypoint_counter = 0

@@ -15,11 +15,11 @@ from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallba
 from rclpy.executors import MultiThreadedExecutor
 
 # DWA PARAMS --> sampling + forward rollout + scoring loop
-ALPHA = 2.4                # for more heading towards goal (increased)
+ALPHA = 2.4                 # for more heading towards goal (increased)
 BETA = 1.2                  # for clearance (increased to avoid tight spaces)
 GAMMA = 1.8                 # for faster speeds (increased)
 DELTA = 2.5                 # for reducing distance to current waypoint (significantly increased)
-EPSILON = 0.18               # for penalizing rotation (reduced from 0.8 to allow more rotation)
+EPSILON = 0.18              # for penalizing rotation (reduced from 0.8 to allow more rotation)
 ZETA = 0.3                  # for smoothness (prefer velocities close to current)
 
 DEL_T = 1.75                # Reduced from 2.0 for faster computation
@@ -87,7 +87,7 @@ class ebotNav3B(Node):
 
         self.prev_cmd = Twist()
 
-        self.bot_radius = 0.25; self.safety_margin = 0.15
+        self.bot_radius = 0.25; self.safety_margin = 0.10
         self.safety_distance = self.bot_radius + self.safety_margin
         self.safety_distance_sq = self.safety_distance ** 2  # Squared for faster collision checks
 
@@ -108,7 +108,7 @@ class ebotNav3B(Node):
         self.target_thresh = 0.18
         self.yaw_thresh = 0.05
 
-        self.dist_tolerance = 0.17    # if more than this, moving to target
+        self.dist_tolerance = 0.10    # if more than this, moving to target
         self.min_traj_V = 0.3  # minimal forward speed for candidate trajectories
 
         self.last_all_trajs = []

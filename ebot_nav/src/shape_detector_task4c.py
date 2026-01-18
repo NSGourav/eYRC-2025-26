@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Optimized line detector for laser scan data with shape detection"""
-
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -19,20 +17,18 @@ from tf2_ros import TransformException
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
-
 @dataclass
 class ShapeDetection:
-    """Data structure for a detected shape"""
+
     local_position: np.ndarray
-    world_position: np.ndarray  # Actual position (for duplicate checking)
-    goal_position: np.ndarray   # Navigation goal (with safety offset for visualization)
+    world_position: np.ndarray          # Actual position (for duplicate checking)
+    goal_position: np.ndarray           # Navigation goal (with safety offset for visualization)
     shape_type: str
     distance: float
     plant_id: Optional[int]
 
-
 class HoughLineDetector(Node):
-    # Detection constants
+
     SHAPE_STATUS_MAP = {
         "Triangle": "FERTILIZER_REQUIRED",
         "Square": "BAD_HEALTH",
@@ -40,31 +36,26 @@ class HoughLineDetector(Node):
     }
 
     # Angle tolerances for shape detection (degrees)
-    TRIANGLE_ANGLE_45 = (45, 10)  # (target, tolerance) for 2-line triangle
-    TRIANGLE_INTERIOR_ANGLE = 130.0  # Interior angle for triangle detection
-    TRIANGLE_ANGLE_TOLERANCE = 10.0  # Tolerance for interior angle (degrees)
-    SQUARE_ANGLE = (90, 8)  # Square angle tolerance
-    PENTAGON_ANGLES = [(90, 6), (140, 6)]  # Pentagon specific angles
+    TRIANGLE_INTERIOR_ANGLE = 130.0         # Interior angle for triangle detection
+    TRIANGLE_ANGLE_TOLERANCE = 10.0         # Tolerance for interior angle (degrees)
 
     # Distance thresholds
-    CORNER_GAP_MAX = 0.06  # Max gap between connected lines
-    MAX_TRIANGLE_LENGTH = 0.25
+    CORNER_GAP_MAX = 0.06                   # Max gap between connected lines
     MAX_PENTAGON_SQUARE_LENGTH = 0.35
 
     # Triangle edge length constraints
-    TRIANGLE_L2_TARGET = 0.20     # Expected L2 length for triangle (meters)
-    TRIANGLE_L2_TOLERANCE = 0.05  # L2 length tolerance (meters)
+    TRIANGLE_L2_TARGET = 0.20               # Expected L2 length for triangle (meters)
+    TRIANGLE_L2_TOLERANCE = 0.05            # L2 length tolerance (meters)
 
-    # Safety offset to prevent robot collision with shape
-    SAFETY_OFFSET_Y_SQUARE = 0.35  # 25cm offset in y-direction
-    SAFETY_OFFSET_X_SQUARE = 0.20  # 10cm offset in x-direction for Square
+    SAFETY_OFFSET_Y_SQUARE = 0.35           # 25cm offset in y-direction
+    SAFETY_OFFSET_X_SQUARE = 0.20           # 10cm offset in x-direction for Square
 
-    SAFETY_OFFSET_Y_TRIANGLE = 0.60  # 25cm offset in y-direction
-    SAFETY_OFFSET_X_TRIANGLE = 0.27  # 15cm offset in x-direction for Triangle
+    SAFETY_OFFSET_Y_TRIANGLE = 0.60         # 25cm offset in y-direction
+    SAFETY_OFFSET_X_TRIANGLE = 0.27         # 15cm offset in x-direction for Triangle
 
     # Dock station position and exclusion zone (to prevent false triangle detections)
-    DOCK_STATION_POSITION = np.array([0.53, -1.95])  # World coordinates of dock station
-    DOCK_EXCLUSION_RADIUS = 0.5  # Skip triangles within 15cm of dock station
+    DOCK_STATION_POSITION = np.array([0.53, -1.95])     # World coordinates of dock station
+    DOCK_EXCLUSION_RADIUS = 0.5                         # Skip triangles within 15cm of dock station
 
     def __init__(self):
         super().__init__('hough_line_detector')
@@ -72,14 +63,14 @@ class HoughLineDetector(Node):
         # Scan filtering parameters
         self.min_range = 0.1
         self.max_range = 5.0
-        self.median_filter_size = 10  # Reduced from 25 to 10 to preserve more points and reduce gaps
+        self.median_filter_size = 10            # Reduced from 25 to 10 to preserve more points and reduce gaps
 
         # Hough parameters
         self.rho_resolution = 0.005
         self.theta_resolution = np.pi / 360
-        self.hough_threshold = 11      # Lowered from 12 to 8 to detect weaker/shorter lines
-        self.min_line_length = 0.12  # Lowered from 0.15 to 0.10 (10cm) to catch shorter segments
-        self.max_line_gap = 0.08     # Increased from 0.05 to 0.10 (10cm) to bridge larger gaps
+        self.hough_threshold = 11               # Lowered from 12 to 8 to detect weaker/shorter lines
+        self.min_line_length = 0.12             # Lowered from 0.15 to 0.10 (10cm) to catch shorter segments
+        self.max_line_gap = 0.08                # Increased from 0.05 to 0.10 (10cm) to bridge larger gaps
 
         # Minimum valid line length to filter noise (2cm)
         self.min_valid_line_length = 0.02
@@ -248,12 +239,12 @@ class HoughLineDetector(Node):
 
                     # Store detection with both actual and goal positions
                     detection = ShapeDetection(
-                        local_position=shape_position,
-                        world_position=world_pos,      # Actual position (for duplicate checking)
-                        goal_position=goal_world_pos,  # Goal position (for navigation & visualization)
-                        shape_type=shape_type,
-                        distance=shape_distance,
-                        plant_id=plant_id
+                        local_position = shape_position,
+                        world_position = world_pos,      # Actual position (for duplicate checking)
+                        goal_position = goal_world_pos,  # Goal position (for navigation & visualization)
+                        shape_type = shape_type,
+                        distance = shape_distance,
+                        plant_id = plant_id
                     )
                     self.detected_shapes.append(detection)
 
@@ -285,7 +276,6 @@ class HoughLineDetector(Node):
             self.get_logger().error(f"Error in scan_callback: {str(e)}")
             import traceback
             self.get_logger().error(traceback.format_exc())
-
 
     # ========================================================================
     # SCAN PROCESSING METHODS
@@ -803,55 +793,29 @@ class HoughLineDetector(Node):
         self.get_logger().debug('[TRIANGLE] No valid triangle pattern found')
         return False
 
-    def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float) -> Optional[int]:
-        """
-        Assign plant_id (0-8) based on lane and segment
-        """
-        # Define lane boundaries (expanded to include robot waypoint positions)
-        lanes = {
-            1: {'x_range': (0.20, 0.60), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
-            2: {'x_range': (-1.70, -1.20), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
-            3: {'x_range': (-3.70, -3.20), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
+    def assign_plant_id(self, actual_pos):
+        plant_location = {
+            1: np.array([-0.52, -4.10]),
+            2: np.array([-0.52, -2.75]),
+            3: np.array([-0.52, -1.40]),
+            4: np.array([-0.52, -0.05]),
+            5: np.array([-2.40, -4.10]),
+            6: np.array([-2.40, -2.75]),
+            7: np.array([-2.40, -1.40]),
+            8: np.array([-2.40, -0.05])
         }
 
-        # Find current lane
-        current_lane = None
-        for lane_num, lane_data in lanes.items():
-            x_min, x_max = lane_data['x_range']
-            if x_min <= robot_x <= x_max:
-                current_lane = lane_num
-                break
+        min_dist = float('inf')
+        closest_id = None
 
-        if current_lane is None:
-            self.get_logger().warn(f"Robot x={robot_x:.3f} not in any lane")
-            return None
+        for plant_id, pos in plant_location.items():
+            dist = np.linalg.norm(actual_pos - pos)
 
-        is_left_side = shape_world_pos[0] < robot_x
+            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
+                min_dist = dist
+                closest_id = plant_id
 
-        # Lane 1: Dock on right, segments on left
-        if current_lane == 1:
-            if not is_left_side:
-                return 0
-            else:
-                for (y_min, y_max), plant_id in lanes[1]['left_segments']:
-                    if y_min <= robot_y <= y_max:
-                        return plant_id
-
-        # Lane 2: Both sides
-        elif current_lane == 2:
-            segments = lanes[2]['right_segments'] if not is_left_side else lanes[2]['left_segments']
-            for (y_min, y_max), plant_id in segments:
-                if y_min <= robot_y <= y_max:
-                    return plant_id
-
-        # Lane 3: Right side only
-        elif current_lane == 3 and not is_left_side:
-            for (y_min, y_max), plant_id in lanes[3]['right_segments']:
-                if y_min <= robot_y <= y_max:
-                    return plant_id
-
-        self.get_logger().warn(f"Could not assign plant_id")
-        return None
+        return closest_id
 
     def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
         """Apply safety offset to shape position to prevent collision
@@ -961,7 +925,6 @@ class HoughLineDetector(Node):
                             break
 
             groups.append(group)
-
         return groups
 
     def score_group(self, lines: List[Dict]) -> float:
@@ -1122,7 +1085,6 @@ class HoughLineDetector(Node):
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
-
 def main(args=None):
     rclpy.init(args=args)
     node = HoughLineDetector()
@@ -1133,7 +1095,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

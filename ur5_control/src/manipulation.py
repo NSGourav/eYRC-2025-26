@@ -65,7 +65,7 @@ class ArmController(Node):
         self.orientation_tolerance = 0.01  
         self.max_angular_velocity = 1.0
         self.max_linear_velocity = 0.1
-        self.min_linear_velocity = 0.015
+        self.min_linear_velocity = 0.0
         
         # Control loop parameters
         self.kp_position = 1.5

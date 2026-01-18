@@ -2,12 +2,12 @@
 
 # Team ID:          [ eYRC#5076 ]
 # Author List:		[ Nagulapalli Shavaneeth Gourav, Pradeep J, Anand Vardhan, Raj Mohammad ]
-# Filename:		    Task4A_manipulation.py
+# Filename:		    Task5_manipulation.py
 # Functions:
-#			        [pose_callback, force_callback, control_magnet, arm_vel_publish, lookup_tf, bad_fruit_callback, goal_pose_nav, control_loop]
+#			        []
 # Nodes:		    Add your publishing and subscribing node
 #			        Publishing Topics  - [ /delta_twist_cmds ]
-#                   Subscribing Topics - [ /tcp_pose_raw], /net_wrench
+#                   Subscribing Topics - [ /tcp_pose_raw]
 
 import rclpy
 import tf2_ros
@@ -30,39 +30,58 @@ class ArmController(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.cmd_pub = self.create_publisher(TwistStamped, "/delta_twist_cmds", 10)
+        # Publisher: publish end-effector velocity commands
+        self.cmd_pub = self.create_publisher(Twist, "/delta_twist_cmds", 10)
         self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group=MutuallyExclusiveCallbackGroup()
         
         self.pose_sub=self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
-        self.rate = self.create_rate(1.2, self.get_clock())
+        self.rate = self.create_rate(2.0, self.get_clock())
 
-        self.flag_force=False
-        
+        self.flag_force = False
+
         self.current_position = None
         self.current_orientation = None 
         self.current_rotation_matrix = None
-        self.flag_fruit=0
-        self.detection_service = self.create_timer(0.5, self.control_loop,callback_group=self.callback_group)
+        self.flag_fruit = 0
+        self.flag_fertilizer_drop = 0
+
+        self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
         self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group=self.callback_group)
+        self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group=self.callback_group)
 
         self.team_id = "5076"
-        self.drop_pose = [-0.81, 0.01, 0.3, 0.7, -0.7, 0.0, 0.0]
+        self.drop_pose = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
+        self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]        
 
         self.fertiliser_pose = None
+        self.ebot_pose = None
+        self.home_location = [0.12, -0.11, 0.445,  0.7, -0.7, 0.0, 0.0]
 
         # Error positions
-        self.position_tolerance = 0.05  
-        self.orientation_tolerance = 0.1  # Orientation tolerance
+        self.position_tolerance = 0.02
+        self.orientation_tolerance = 0.01  
         self.max_angular_velocity = 1.0
-        self.max_linear_velocity = 0.2
-        self.min_linear_velocity = 0.05
+        self.max_linear_velocity = 0.1
+        self.min_linear_velocity = 0.015
         
         # Control loop parameters
-        self.kp_position=1.5
-        self.kp_orientation=3.0
+        self.kp_position = 1.5
+        self.kp_orientation = 3.0
+
+        # Derivative control
+        self.previous_position_error = np.zeros(3)
+        self.previous_orientation_error = np.zeros(3)
+        self.kd_position = 0.3
+        self.kd_orientation = 0.5
+        
+        # Velocity smoothing
+        self.previous_linear_velocity = np.zeros(3)
+        self.previous_angular_velocity = np.zeros(3)
+        self.velocity_smoothing_factor = 0.3  # 0 = no smoothing, 1 = full smoothing
+        self.dt = 0.5
 
     def pose_callback(self):
         self.current_pose=self.lookup_tf('tool0')
@@ -120,40 +139,113 @@ class ArmController(Node):
 
         self.get_logger().error(f'Timeout waiting for TF: {frame_id}')
         return None
-    
+
+    def goal_pose_nav(self,target_location):
+
+        self.get_logger().info(f"Goal pose navigation to target: {target_location}")
+        target_position = np.array(target_location[:3])
+        target_quaternion = np.array(target_location[3:7])
+        target_rotation_matrix = tf_transformations.quaternion_matrix(target_quaternion)[:3, :3]
+
+        z_unit_vector = np.array([0.0, 0.0, 1.0])
+        desired_z_axis = target_rotation_matrix  @ z_unit_vector
+
+        position_reached = False
+        orientation_reached = False
+
+        # Reset derivative tracking for new goal
+        self.previous_position_error = np.zeros(3)
+        self.previous_orientation_error = np.zeros(3)
+        self.previous_linear_velocity = np.zeros(3)
+        self.previous_angular_velocity = np.zeros(3)
+
+        while rclpy.ok():
+            try:                
+                self.current_rotation_matrix = tf_transformations.quaternion_matrix(self.current_orientation)[:3, :3]
+
+                #Position error
+                position_error = target_position - self.current_position
+                position_derivative = (position_error - self.previous_position_error)/self.dt
+                
+                desired_velocity = self.kp_position * position_error + self.kd_position * position_derivative
+                desired_velocity = np.clip(desired_velocity, -self.max_linear_velocity, self.max_linear_velocity)
+                desired_velocity = np.where(
+                    np.abs(desired_velocity) < self.min_linear_velocity,
+                    self.min_linear_velocity * np.sign(desired_velocity),
+                    desired_velocity
+                )
+                
+                # Smooth linear velocity
+                desired_velocity = (1 - self.velocity_smoothing_factor) * desired_velocity + \
+                                   self.velocity_smoothing_factor * self.previous_linear_velocity
+                self.previous_linear_velocity = desired_velocity
+                self.previous_position_error = position_error
+                
+                position_error_norm = np.linalg.norm(position_error)
+
+                current_z_axis = self.current_rotation_matrix @ z_unit_vector
+                orientation_error = np.cross(current_z_axis, desired_z_axis)
+                orientation_derivative = (orientation_error - self.previous_orientation_error)/self.dt
+                
+                orientation_error_norm = np.linalg.norm(orientation_error)
+                omega_world = self.kp_orientation * orientation_error + self.kd_orientation * orientation_derivative
+                omega_world = np.clip(omega_world, -self.max_angular_velocity, self.max_angular_velocity)
+                
+                # Smooth angular velocity
+                omega_world = (1 - self.velocity_smoothing_factor) * omega_world + \
+                              self.velocity_smoothing_factor * self.previous_angular_velocity
+                self.previous_angular_velocity = omega_world
+                self.previous_orientation_error = orientation_error
+
+                twist_cmd = Twist()
+
+                if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
+                    twist_cmd.angular.x = omega_world[0]
+                    twist_cmd.angular.y = omega_world[1]
+                    twist_cmd.angular.z = omega_world[2]
+                elif orientation_reached == False:
+                    orientation_reached = True
+
+                if position_error_norm > self.position_tolerance and position_reached == False: 
+                    twist_cmd.linear.x = desired_velocity[0]
+                    twist_cmd.linear.y = desired_velocity[1]
+                    twist_cmd.linear.z = desired_velocity[2]
+                elif position_reached == False:
+                    position_reached = True
+
+                self.arm_vel_publish(twist_cmd)
+                self.rate.sleep()
+
+                if position_reached == True and orientation_reached == True:
+                    self.get_logger().info(f"Goal pose reached at target: {target_location}")
+                    return True
+                
+            except Exception as e:
+                self.get_logger().error(f"Exception in goal_pose_nav: {e}")
+                self.rate.sleep()
+
     def bad_fruit_callback(self):
+
         if self.flag_fruit == 0:
             return
         self.bad_fruit_service.cancel()
-
         self.flag_fruit_location = False
 
-        fruit_frames = ['5076_bad_fruit_0','5076_bad_fruit_1','5076_bad_fruit_2']
+        fruit_frames = ['5076_bad_fruit_1','5076_bad_fruit_2','5076_bad_fruit_3']
         self.bad_fruits = [None] * 3
 
-        # ---------------- TF lookup ----------------
         while not self.flag_fruit_location:
             self.rate.sleep()
             try:
                 for i in range(3):
                     pose = self.lookup_tf(fruit_frames[i])
-                    # pose[0] += 0.02     # x-offset
                     self.bad_fruits[i] = pose
-
                 self.flag_fruit_location = True
                 self.get_logger().info('TF lookup successful — poses stored')
-
             except tf2_ros.LookupException:
                 self.get_logger().debug('TF not available yet, retrying ...')
-
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
-
-        # ---------------- Pick & place ----------------
-        self.goal_pose_nav([0.1, -0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
-        self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
-
-        self.bad_fruit_waypoint = [-0.4, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0]        
 
         for i in range(3):
             fruit_pose = self.bad_fruits[i]
@@ -174,105 +266,77 @@ class ArmController(Node):
 
             self.goal_pose_nav(self.bad_fruit_waypoint)
 
-        # self.goal_pose_nav(home_pose)
         self.flag_fruit = 0
 
-    def goal_pose_nav(self,target_location):
-
-        self.get_logger().info(f"Goal pose navigation to target: {target_location}")
-        target_pos = np.array(target_location[:3])
-        target_quat = np.array(target_location[3:7])
-        target_rotation_matrix = tf_transformations.quaternion_matrix(target_quat)[:3, :3]
-
-        z_unit_vector = np.array([0.0, 0.0, 1.0])
-        desired_z_axis = target_rotation_matrix  @ z_unit_vector
-
-        position_reached=False
-        orientation_reached=False
-
-        while rclpy.ok():
-            try:                
-                self.current_rotation_matrix = tf_transformations.quaternion_matrix(self.current_orientation)[:3, :3]
-
-                #Position error
-                position_error = target_pos - self.current_position
-                desired_velocity = self.kp_position * position_error
-                desired_velocity = np.clip(desired_velocity, -self.max_linear_velocity, self.max_linear_velocity)
-                desired_velocity = np.where(
-                    np.abs(desired_velocity) < self.min_linear_velocity,
-                    self.min_linear_velocity * np.sign(desired_velocity),
-                    desired_velocity
-                )
-                position_error_norm = np.linalg.norm(position_error)
-
-                current_z_axis   = self.current_rotation_matrix @ z_unit_vector
-                orientation_error = np.cross(current_z_axis, desired_z_axis)
-                orientation_error_norm = np.linalg.norm(orientation_error)
-                omega_world = self.kp_orientation * orientation_error
-                omega_world = np.clip(omega_world, -self.max_angular_velocity, self.max_angular_velocity)
-
-                twist_cmd = Twist()
-
-                if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
-                    twist_cmd.angular.x = omega_world[0]
-                    twist_cmd.angular.y = omega_world[1]
-                    twist_cmd.angular.z = omega_world[2]
-
-                elif orientation_reached == False:
-                    orientation_reached = True
-
-                if (position_error_norm > self.position_tolerance and position_reached == False): 
-                    twist_cmd.linear.x = desired_velocity[0]
-                    twist_cmd.linear.y = desired_velocity[1]
-                    twist_cmd.linear.z = desired_velocity[2]
-
-                elif position_reached == False:
-                    position_reached=True
-                
-                self.arm_vel_publish(twist_cmd)
-                self.rate.sleep()
-
-                if position_reached == True and orientation_reached == True:
-                    self.get_logger().info(f"Goal pose reached at target: {target_location}")
-                    return True
-                
-            except Exception as e:
-                self.get_logger().error(f"Exception in goal_pose_nav: {e}")
-                self.rate.sleep()
-
-    def control_loop(self):
-        self.detection_service.cancel()
-        self.flag_target_loc=False
-
-        while not self.flag_target_loc:
+    def pick_and_place_callback(self, request, response):
+        
+        self.flag_target_location = False
+        
+        while not self.flag_target_location:
             self.rate.sleep()
             try:
-                self.fertiliser_pose = self.lookup_tf('5076_fertiliser_can')
+                self.fertiliser_pose = self.lookup_tf('5076_fertilizer_1')
+                if request.data == False:
+                    self.ebot_pose = self.lookup_tf('5076_ebot_6')
                 if self.fertiliser_pose:
-                    self.flag_target_loc = True
+                    self.flag_target_location = True
                     self.get_logger().info('TF lookup successful — poses stored')
-                
             except tf2_ros.LookupException:
                 self.get_logger().debug('TF not available yet, retrying ...')
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
         
-        self.fertiliser_pose[1]+=0.01
-        self.goal_pose_nav(self.fertiliser_pose)
-        self.fertiliser_pose[1]-=0.02
-        self.goal_pose_nav(self.fertiliser_pose)
+        if request.data == False:  # Sequence 0
 
-        self.control_magnet(True)
+            self.fertiliser_pose[1] += 0.02
+            self.goal_pose_nav(self.fertiliser_pose)
 
-        self.fertiliser_pose[1]+=0.2
-        self.goal_pose_nav(self.fertiliser_pose)
+            self.control_magnet(True)
+
+            self.fertiliser_pose[1] += 0.2
+            self.goal_pose_nav(self.fertiliser_pose)
+
+            self.ebot_pose[2] += 0.2
+            self.goal_pose_nav(self.ebot_pose)
+
+            self.control_magnet(False)
+
+            self.flag_fruit = 1
+
+            response.success = True
+            response.message = "Fertiliser can placed successfully"
+            
+        else:  # Sequence 1
+
+            self.goal_pose_nav([0.1, -0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
+
+            self.fertiliser_pose[2] += 0.1
+            self.goal_pose_nav(self.fertiliser_pose)
+            self.fertiliser_pose[2] -= 0.08
+            self.goal_pose_nav(self.fertiliser_pose)
+            self.control_magnet(True)
+
+            self.flag_fertilizer_drop = 1
+
+            response.success = True
+            response.message = "Sequence 1 completed successfully"
+
+        return response
+    
+    def drop_fertilizer_callback(self):
+            
+        if self.flag_fertilizer_drop == 0:
+            return
+        self.drop_fertilizer_service.cancel()
+            
+        self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
+        self.goal_pose_nav(self.bad_fruit_waypoint)
 
         self.goal_pose_nav(self.drop_pose)
         self.control_magnet(False)
 
-        print('fertliser done')
-        self.flag_fruit = 1
-    
+        self.flag_fertilizer_drop = 0
+
 def main():
     rclpy.init()
     robot_controller = ArmController()

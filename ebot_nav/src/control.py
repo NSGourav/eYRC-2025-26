@@ -30,14 +30,14 @@ class EbotNav(Node):
 
         self.waypoints = [
             (0.0, 0.0, -1.57),
-            (0.7, -1.857, 0.0),           # 1st lane start
+            (0.7, -1.857, 0.0),             # 1st lane start
             (2.072, -1.704, 0.0),           # Dock station
             (4.835, -1.707, 0.0),           # 1st lane end
             (4.495, 0.006, 3.14),           # 2nd lane start
             (1.448, 0.072, 3.14),           # 2nd lane end
             (1.108, 1.656, 0.0),            # 3rd lane start
-            (4.8, 1.955, 0.0),            # 3rd lane end
-            (0.0, 0.0, 3.14)               # Home
+            (4.8, 1.955, 0.0),              # 3rd lane end
+            (0.0, 0.0, 3.14)                # Home
         ]
 
         self.waypoint_counter = 0
@@ -281,7 +281,7 @@ class EbotNav(Node):
                         time.sleep(2)
                         
                         # Uncomment when ready to use pick and place
-                        # service_data = False if self.waypoint_counter == 2 else True
+                        # service_data = False if self.waypoint_counter == 2
                         # self.call_pick_and_place_service(service_data)
                         # return
                         

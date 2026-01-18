@@ -35,9 +35,9 @@ class ArmController(Node):
         self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()
-        self.fruit_cb_group=MutuallyExclusiveCallbackGroup()
+        self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
         
-        self.pose_sub=self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
+        self.pose_sub = self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
         self.rate = self.create_rate(2.0, self.get_clock())
 
         self.flag_force = False
@@ -153,7 +153,6 @@ class ArmController(Node):
         position_reached = False
         orientation_reached = False
 
-        # Reset derivative tracking for new goal
         self.previous_position_error = np.zeros(3)
         self.previous_orientation_error = np.zeros(3)
         self.previous_linear_velocity = np.zeros(3)

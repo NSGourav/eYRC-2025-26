@@ -36,14 +36,14 @@ class ArmController(Node):
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
-        
+
         self.pose_sub = self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
         self.rate = self.create_rate(2.0, self.get_clock())
 
         self.flag_force = False
 
         self.current_position = None
-        self.current_orientation = None 
+        self.current_orientation = None
         self.current_rotation_matrix = None
         self.flag_fruit = 0
         self.flag_fertilizer_drop = 0
@@ -54,7 +54,7 @@ class ArmController(Node):
 
         self.team_id = "5076"
         self.drop_pose = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
-        self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]        
+        self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]
 
         self.fertiliser_pose = None
         self.ebot_pose = None
@@ -62,11 +62,11 @@ class ArmController(Node):
 
         # Error positions
         self.position_tolerance = 0.02
-        self.orientation_tolerance = 0.01  
+        self.orientation_tolerance = 0.01
         self.max_angular_velocity = 1.0
         self.max_linear_velocity = 0.1
         self.min_linear_velocity = 0.0
-        
+
         # Control loop parameters
         self.kp_position = 1.5
         self.kp_orientation = 3.0
@@ -76,7 +76,7 @@ class ArmController(Node):
         self.previous_orientation_error = np.zeros(3)
         self.kd_position = 0.3
         self.kd_orientation = 0.5
-        
+
         # Velocity smoothing
         self.previous_linear_velocity = np.zeros(3)
         self.previous_angular_velocity = np.zeros(3)
@@ -92,12 +92,12 @@ class ArmController(Node):
 
         twist_msg = TwistStamped()
         twist_msg.header.stamp = self.get_clock().now().to_msg()
-        twist_msg.twist.linear.x =  twist_cmd.twist.linear.x
-        twist_msg.twist.linear.y = twist_cmd.twist.linear.y
-        twist_msg.twist.linear.z = twist_cmd.twist.linear.z
-        twist_msg.twist.angular.x = twist_cmd.twist.angular.x
-        twist_msg.twist.angular.y = twist_cmd.twist.angular.y
-        twist_msg.twist.angular.z = twist_cmd.twist.angular.z
+        twist_msg.twist.linear.x =  twist_cmd.linear.x
+        twist_msg.twist.linear.y = twist_cmd.linear.y
+        twist_msg.twist.linear.z = twist_cmd.linear.z
+        twist_msg.twist.angular.x = twist_cmd.angular.x
+        twist_msg.twist.angular.y = twist_cmd.angular.y
+        twist_msg.twist.angular.z = twist_cmd.angular.z
         self.cmd_pub.publish(twist_msg)
 
     def force_callback(self, msg):
@@ -113,11 +113,11 @@ class ArmController(Node):
         request.data = state  # True to activate, False to deactivate
         future = self.magnet_client.call_async(request)
         return future
-    
+
     def lookup_tf(self, frame_id, timeout_sec=2.0):
         start = self.get_clock().now()
         while (self.get_clock().now() - start).nanoseconds < timeout_sec * 1e9:
-            
+
             try:
                 tf = self.tf_buffer.lookup_transform(
                     'base_link',
@@ -159,13 +159,13 @@ class ArmController(Node):
         self.previous_angular_velocity = np.zeros(3)
 
         while rclpy.ok():
-            try:                
+            try:
                 self.current_rotation_matrix = tf_transformations.quaternion_matrix(self.current_orientation)[:3, :3]
 
                 #Position error
                 position_error = target_position - self.current_position
                 position_derivative = (position_error - self.previous_position_error)/self.dt
-                
+
                 desired_velocity = self.kp_position * position_error + self.kd_position * position_derivative
                 desired_velocity = np.clip(desired_velocity, -self.max_linear_velocity, self.max_linear_velocity)
                 desired_velocity = np.where(
@@ -173,23 +173,23 @@ class ArmController(Node):
                     self.min_linear_velocity * np.sign(desired_velocity),
                     desired_velocity
                 )
-                
+
                 # Smooth linear velocity
                 desired_velocity = (1 - self.velocity_smoothing_factor) * desired_velocity + \
                                    self.velocity_smoothing_factor * self.previous_linear_velocity
                 self.previous_linear_velocity = desired_velocity
                 self.previous_position_error = position_error
-                
+
                 position_error_norm = np.linalg.norm(position_error)
 
                 current_z_axis = self.current_rotation_matrix @ z_unit_vector
                 orientation_error = np.cross(current_z_axis, desired_z_axis)
                 orientation_derivative = (orientation_error - self.previous_orientation_error)/self.dt
-                
+
                 orientation_error_norm = np.linalg.norm(orientation_error)
                 omega_world = self.kp_orientation * orientation_error + self.kd_orientation * orientation_derivative
                 omega_world = np.clip(omega_world, -self.max_angular_velocity, self.max_angular_velocity)
-                
+
                 # Smooth angular velocity
                 omega_world = (1 - self.velocity_smoothing_factor) * omega_world + \
                               self.velocity_smoothing_factor * self.previous_angular_velocity
@@ -205,7 +205,7 @@ class ArmController(Node):
                 elif orientation_reached == False:
                     orientation_reached = True
 
-                if position_error_norm > self.position_tolerance and position_reached == False: 
+                if position_error_norm > self.position_tolerance and position_reached == False:
                     twist_cmd.linear.x = desired_velocity[0]
                     twist_cmd.linear.y = desired_velocity[1]
                     twist_cmd.linear.z = desired_velocity[2]
@@ -218,7 +218,7 @@ class ArmController(Node):
                 if position_reached == True and orientation_reached == True:
                     self.get_logger().info(f"Goal pose reached at target: {target_location}")
                     return True
-                
+
             except Exception as e:
                 self.get_logger().error(f"Exception in goal_pose_nav: {e}")
                 self.rate.sleep()
@@ -268,9 +268,9 @@ class ArmController(Node):
         self.flag_fruit = 0
 
     def pick_and_place_callback(self, request, response):
-        
+
         self.flag_target_location = False
-        
+
         while not self.flag_target_location:
             self.rate.sleep()
             try:
@@ -284,7 +284,7 @@ class ArmController(Node):
                 self.get_logger().debug('TF not available yet, retrying ...')
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
-        
+
         if request.data == False:  # Sequence 0
 
             self.fertiliser_pose[1] += 0.02
@@ -304,7 +304,7 @@ class ArmController(Node):
 
             response.success = True
             response.message = "Fertiliser can placed successfully"
-            
+
         else:  # Sequence 1
 
             self.goal_pose_nav([0.1, -0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
@@ -321,13 +321,13 @@ class ArmController(Node):
             response.message = "Sequence 1 completed successfully"
 
         return response
-    
+
     def drop_fertilizer_callback(self):
-            
+
         if self.flag_fertilizer_drop == 0:
             return
         self.drop_fertilizer_service.cancel()
-            
+
         self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
         self.goal_pose_nav(self.bad_fruit_waypoint)
 

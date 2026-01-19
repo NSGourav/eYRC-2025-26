@@ -52,7 +52,7 @@ class HoughLineDetector(Node):
     SAFETY_OFFSET_Y_TRIANGLE = 0.60                     # 25cm offset in y-direction
 
     # Dock station position and exclusion zone (to prevent false triangle detections)
-    DOCK_STATION_POSITION = np.array([0.53, -1.95])     # World coordinates of dock station
+    DOCK_STATION_POSITION = np.array([2.272, -1.70])     # World coordinates of dock station
     DOCK_EXCLUSION_RADIUS = 0.5                         # Skip triangles within 15cm of dock station
 
     def __init__(self):
@@ -62,7 +62,7 @@ class HoughLineDetector(Node):
         self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
 
         self.marker_pub = self.create_publisher(MarkerArray, '/shape_markers', 10)
-        self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10) 
+        self.shape_pose_pub = self.create_publisher(String, '/shape_pose', 10)
 
         # Scan filtering parameters
         self.min_range = 0.1
@@ -148,7 +148,7 @@ class HoughLineDetector(Node):
                 return
             recovered_lines = self.merge_invalid_to_valid_lines(valid_lines, invalid_lines)               # Merge invalid-angle lines to nearby valid-angle lines if collinear
             merged_lines = self.merge_collinear_lines(recovered_lines)                                    # Merge collinear/similar lines
-            line_groups = self.group_by_proximity(merged_lines, 0.15)                                     # Group nearby lines 
+            line_groups = self.group_by_proximity(merged_lines, 0.15)                                     # Group nearby lines
             best_group = self.find_best_group(line_groups)                                                # Select best line groups based on scoring
 
             # if not best_group:
@@ -160,7 +160,7 @@ class HoughLineDetector(Node):
             # ========================================================================
 
             self.cache_laser_offset(msg.header.frame_id)                                                 # Cache laser offset from TF (only done once)
-            bot_position_x, bot_position_y, bot_yaw =  self.position_x,  self.position_y,  self.yaw         
+            bot_position_x, bot_position_y, bot_yaw =  self.position_x,  self.position_y,  self.yaw
 
             # Determine shape type and position
             shape_type = self.detect_shape(best_group)
@@ -178,7 +178,7 @@ class HoughLineDetector(Node):
                         return
 
                 if is_new:
-                    plant_id = self.assign_plant_id(world_pos,self.position_x,self.position_y)
+                    plant_id = self.assign_plant_id(world_pos)
                     shape_status = self.SHAPE_STATUS_MAP.get(shape_type)
 
                     # Calculate goal position with safety offset for navigation/visualization
@@ -229,7 +229,7 @@ class HoughLineDetector(Node):
     # ========================================================================
 
     def scan_to_points(self, msg: LaserScan) -> np.ndarray:
-        
+
         """Convert laser scan to 2D points, filtering by angle and position"""
 
         ranges = np.array(msg.ranges, dtype = float)
@@ -255,7 +255,7 @@ class HoughLineDetector(Node):
         MAX_FORWARD_DISTANCE = 2.0  # Max X distance
         MIN_FORWARD_DISTANCE = 0.1  # Min X distance
         MAX_LATERAL_DISTANCE = 1.8  # Max |Y| distance
-        MIN_LATERAL_DISTANCE = 0.1  # Min |Y| distance 
+        MIN_LATERAL_DISTANCE = 0.1  # Min |Y| distance
 
         points = []
         for i, r in enumerate(filtered):
@@ -687,7 +687,7 @@ class HoughLineDetector(Node):
                     self.get_logger().info(f'✓ Triangle detected: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
                     return 'Triangle'
                 elif angle_inv >= 120 and angle_inv <= 150:
-                    self.get_logger().info(f'✓ Not Triangle: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')                
+                    self.get_logger().info(f'✓ Not Triangle: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
         return None
 
     def calculate_shape_position(self, lines: List[Dict], shape_type: str) -> np.ndarray:
@@ -709,7 +709,7 @@ class HoughLineDetector(Node):
                         corner = (p1 + p2) / 2
 
             return corner
-    
+
         if shape_type == 'Triangle':
             if len(lines) == 2:
                 return compute_corner(lines[0], lines[1])
@@ -722,68 +722,34 @@ class HoughLineDetector(Node):
                 return corner_01
             else:
                 return corner_12
-        
+
         # Default: centroid
         all_endpoints = np.array([[l['start'], l['end']] for l in lines]).reshape(-1, 2)
         return np.mean(all_endpoints, axis=0)
 
-    def assign_plant_id(self, shape_world_pos: np.ndarray, robot_x: float, robot_y: float) -> Optional[int]:
-        """
-        Assign plant_id (0-8) based on lane and segment
-
-        Simplified version - returns None if position doesn't match expected ranges.
-        For production, consider loading this from a config file.
-        """
-        # Define lane boundaries (simplified - could be config file)
-        lanes = {
-            1: {'x_range': (0.2, 0.35), 'right_id': 0, 'left_segments': [((-4.67, -3.374), 1), ((-3.374, -2.020), 2), ((-2.020, -0.720), 3), ((-0.720, 0.552), 4)]},
-            2: {'x_range': (-1.45, -1.3), 'right_segments': [((-4.757, -3.381), 1), ((-3.381, -2.057), 2), ((-2.057, -0.711), 3), ((-0.711, 0.553), 4)], 'left_segments': [((-4.757, -3.381), 5), ((-3.381, -2.057), 6), ((-2.057, -0.711), 7), ((-0.711, 0.553), 8)]},
-            3: {'x_range': (-3.5, -3.35), 'right_segments': [((-4.716, -3.456), 5), ((-3.456, -2.079), 6), ((-2.079, -0.723), 7), ((-0.723, 0.527), 8)]}
+    def assign_plant_id(self, actual_pos):
+        plant_location = {
+            1: np.array([-0.52, -4.10]),
+            2: np.array([-0.52, -2.75]),
+            3: np.array([-0.52, -1.40]),
+            4: np.array([-0.52, -0.05]),
+            5: np.array([-2.40, -4.10]),
+            6: np.array([-2.40, -2.75]),
+            7: np.array([-2.40, -1.40]),
+            8: np.array([-2.40, -0.05])
         }
 
-        # Find current lane
-        current_lane = None
-        for lane_num, lane_data in lanes.items():
-            x_min, x_max = lane_data['x_range']
-            if x_min <= robot_x <= x_max:
-                current_lane = lane_num
-                break
+        min_dist = float('inf')
+        closest_id = None
 
-        if current_lane is None:
-            self.get_logger().warn(f"Robot x={robot_x:.3f} not in any lane")
-            return None
+        for plant_id, pos in plant_location.items():
+            dist = np.linalg.norm(actual_pos - pos)
 
-        is_left_side = shape_world_pos[0] < robot_x
+            if dist < min_dist or (np.isclose(dist, min_dist) and plant_id < closest_id):
+                min_dist = dist
+                closest_id = plant_id
 
-        # Lane 1: Dock on right, segments on left
-        if current_lane == 1:
-            if not is_left_side:
-                self.get_logger().info("Plant ID: 0 (Dock - Lane 1 Right)")
-                return 0
-            else:
-                for (y_min, y_max), plant_id in lanes[1]['left_segments']:
-                    if y_min <= robot_y <= y_max:
-                        self.get_logger().info(f"Plant ID: {plant_id} (Lane 1 Left, y:[{y_min}, {y_max}])")
-                        return plant_id
-
-        # Lane 2: Both sides
-        elif current_lane == 2:
-            segments = lanes[2]['right_segments'] if not is_left_side else lanes[2]['left_segments']
-            for (y_min, y_max), plant_id in segments:
-                if y_min <= robot_y <= y_max:
-                    side = "Right" if not is_left_side else "Left"
-                    self.get_logger().info(f"Plant ID: {plant_id} (Lane 2 {side}, y:[{y_min}, {y_max}])")
-                    return plant_id
-
-        # Lane 3: Right side only
-        elif current_lane == 3 and not is_left_side:
-            for (y_min, y_max), plant_id in lanes[3]['right_segments']:
-                if y_min <= robot_y <= y_max:
-                    self.get_logger().info(f"Plant ID: {plant_id} (Lane 3 Right, y:[{y_min}, {y_max}])")
-                    return plant_id
-
-        self.get_logger().warn(f"Could not assign plant_id - robot at ({robot_x:.3f}, {robot_y:.3f}) in Lane {current_lane}")
-        return None
+        return closest_id
 
     def apply_safety_offset(self, local_pos: np.ndarray, shape_type: str = None) -> np.ndarray:
         """Apply safety offset to shape position to prevent collision
@@ -797,7 +763,7 @@ class HoughLineDetector(Node):
 
         elif shape_type == 'Triangle':
             offset_x = self.SAFETY_OFFSET_X_TRIANGLE
-            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_TRIANGLE #if local_pos[1] != 0 else 0.0       
+            offset_y = -np.sign(local_pos[1]) * self.SAFETY_OFFSET_Y_TRIANGLE #if local_pos[1] != 0 else 0.0
 
         adjusted_pos = np.array([local_pos[0] + offset_x, local_pos[1] + offset_y])
         return adjusted_pos
@@ -963,7 +929,7 @@ class HoughLineDetector(Node):
             self.ax2.plot([line['start'][0], line['end'][0]],
                          [line['start'][1], line['end'][1]],
                          color=color, linewidth=3, alpha=0.9)
-            
+
         if shape_position is not None:
             self.ax2.scatter(shape_position[0], shape_position[1], c='black', s=120, marker='X', zorder=5)
             self.ax2.text(shape_position[0] + 0.05, shape_position[1] + 0.05, shape_type, fontsize=10, fontweight='bold', color='black')

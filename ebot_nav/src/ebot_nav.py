@@ -87,7 +87,7 @@ class ebotNav3B(Node):
 
         self.prev_cmd = Twist()
 
-        self.bot_radius = 0.25; self.safety_margin = 0.10
+        self.bot_radius = 0.25; self.safety_margin = 0.15
         self.safety_distance = self.bot_radius + self.safety_margin
         self.safety_distance_sq = self.safety_distance ** 2  # Squared for faster collision checks
 
@@ -108,7 +108,7 @@ class ebotNav3B(Node):
         self.target_thresh = 0.18
         self.yaw_thresh = 0.05
 
-        self.dist_tolerance = 0.10    # if more than this, moving to target
+        self.dist_tolerance = 0.15    # if more than this, moving to target
         self.min_traj_V = 0.3  # minimal forward speed for candidate trajectories
 
         self.last_all_trajs = []

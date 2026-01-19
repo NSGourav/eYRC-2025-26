@@ -17,7 +17,7 @@
 *
 *****************************************************************************************
 '''
-  
+
 # Team ID:          [ eYRC#5076 ]
 # Author List:		[ Nagulapalli Shavaneeth Gourav, Pradeep J, Anand Vardhan, Raj Mohammad ]
 # Filename:		    Task4A_perception.py
@@ -37,9 +37,9 @@ import tf_transformations
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError 
+from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import TransformStamped, PointStamped
-from tf2_ros import TransformBroadcaster, Buffer, TransformListener 
+from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
 
 SHOW_IMAGE = True
@@ -84,7 +84,7 @@ def detect_aruco(image):
     # Create detector and find markers in the image
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
     corners, detected_ids, _ = detector.detectMarkers(gray)  # Changed 'ids' to 'detected_ids'
-    
+
     if detected_ids is None or len(detected_ids) == 0:
         return [], [], []
 
@@ -112,7 +112,7 @@ def detect_aruco(image):
         euler_angles = -rotation.as_euler('xyz', degrees=False)
         quat_angles = tf_transformations.quaternion_from_euler(-euler_angles[2], euler_angles[1], euler_angles[0])
         angle_aruco_list.append(quat_angles)
-        
+
         valid_ids.append(detected_ids[i])
 
         # Draw coordinate axes on the marker for visualization
@@ -123,7 +123,7 @@ def detect_aruco(image):
 class Fert_Bad_Fruit_Detector(Node):
 
     def __init__(self):
-        
+
         super().__init__('combined_perception')
         self.bridge = CvBridge()
         self.cv_image = None
@@ -131,12 +131,12 @@ class Fert_Bad_Fruit_Detector(Node):
         self.cb_group = ReentrantCallbackGroup()
 
         # Subscriptions
-        self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)             
-        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)       
+        self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10, callback_group=self.cb_group)
+        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self.depthimagecb, 10, callback_group=self.cb_group)
 
         self.timer = self.create_timer(0.2, self.process_image, callback_group=self.cb_group)
 
-        self.tf_buffer = Buffer()                                               
+        self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.team_id = "5076"
@@ -149,14 +149,14 @@ class Fert_Bad_Fruit_Detector(Node):
         self.smoothing_alpha = 0.3       # Exponential smoothing factor for position filtering (0.2-0.4 recommended, lower = smoother but slower response)
 
         # Fruit colour thresholding
-        self.lower_green = np.array([45, 55, 155])          # HSV lower bound for green color detection 
-        self.upper_green = np.array([65, 95, 230])          # HSV upper bound for green color detection 
+        self.lower_green = np.array([45, 55, 155])          # HSV lower bound for green color detection
+        self.upper_green = np.array([65, 95, 230])          # HSV upper bound for green color detection
 
-        self.lower_cyan = np.array([155, 75, 75])           # HSV lower bound for cyan/turquoise color detection 
-        self.upper_cyan = np.array([170, 160, 225])         # HSV upper bound for cyan/turquoise color detection 
+        self.lower_cyan = np.array([155, 75, 75])           # HSV lower bound for cyan/turquoise color detection
+        self.upper_cyan = np.array([170, 160, 225])         # HSV upper bound for cyan/turquoise color detection
 
-        self.lower_grey = np.array([0, 0, 45])              # HSV lower bound for grey color detection 
-        self.upper_grey = np.array([180, 75, 160])          # HSV upper bound for grey color detection 
+        self.lower_grey = np.array([0, 0, 45])              # HSV lower bound for grey color detection
+        self.upper_grey = np.array([180, 75, 160])          # HSV upper bound for grey color detection
 
         self.CYAN_THRESHOLD = 15.0                          # Amount of cyan pixels present around the fruit
         self.GREY_THRESHOLD = 20.0                          # Amount of grey pixels present around the fruit
@@ -185,7 +185,7 @@ class Fert_Bad_Fruit_Detector(Node):
 
     def bad_fruit_detection(self, bgr_image):
         bad_fruits = []
-        
+
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         green_mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
         cyan_mask = cv2.inRange(hsv, self.lower_cyan, self.upper_cyan)
@@ -199,19 +199,19 @@ class Fert_Bad_Fruit_Detector(Node):
             area = cv2.contourArea(cnt)
             if area < self.min_pixel_area_fruit or area > self.max_pixel_area_fruit :
                 continue
-            
+
             # Get bounding box
             x, y, w, h = cv2.boundingRect(cnt)
-            
+
             # STEP 4: Create mask for green circle
             green_circle_mask = np.zeros(grey_mask.shape, dtype=np.uint8)
             cv2.drawContours(green_circle_mask, [cnt], -1, 255, -1)
-            
+
             # STEP 5: Create ring around the green circle
             kernel = np.ones((25, 25), np.uint8)  # Ring thickness
             outer_mask = cv2.dilate(green_circle_mask, kernel, iterations=1)
             ring_mask = cv2.subtract(outer_mask, green_circle_mask)
-            
+
             # STEP 6: Percentage of grey or cyan inside the ring
             grey_in_ring = cv2.bitwise_and(grey_mask, ring_mask)
             cyan_in_ring = cv2.bitwise_and(cyan_mask, ring_mask)
@@ -219,19 +219,19 @@ class Fert_Bad_Fruit_Detector(Node):
             grey_pixels = np.count_nonzero(grey_in_ring)
             cyan_pixels = np.count_nonzero(cyan_in_ring)
             ring_area = np.count_nonzero(ring_mask)
-            
+
             grey_percentage = (grey_pixels / ring_area) * 100
             cyan_percentage = (cyan_pixels / ring_area) * 100
-            
-            # print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
-            
+
+            print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
+
             if cyan_percentage > self.CYAN_THRESHOLD:
                 continue  # Good fruit, skip
             if grey_percentage < self.GREY_THRESHOLD:
                 continue  # Not enough grey
             if cyan_percentage > grey_percentage:
                 continue  # Cyan is more dominant, probably good fruit
-                        
+
             # Calculate center using moments (more accurate)
             M = cv2.moments(cnt)
             if M["m00"] == 0:
@@ -241,7 +241,7 @@ class Fert_Bad_Fruit_Detector(Node):
             else:
                 cX = int(M["m10"] / M["m00"])
                 cY = int(M["m01"] / M["m00"])
-            
+
             # Get depth and angle
             distance = 0.0
             if self.depth_image is not None:
@@ -249,7 +249,7 @@ class Fert_Bad_Fruit_Detector(Node):
 
             if distance < 1000 or distance > 2000.0:  # Skip if distance between camera and bad fruit is not between 1000mm to 2000mm
                 continue
-            
+
             # print(f"Detected Bad Fruit at position ({cX}, {cY}) - Distance: {distance:.3f} m, Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
 
             fruit_info = {
@@ -260,14 +260,14 @@ class Fert_Bad_Fruit_Detector(Node):
             }
             bad_fruits.append(fruit_info)
             fruit_id += 1
-        
+
         return bad_fruits
 
     def process_image(self):
-        
+
         if self.cv_image is None or self.depth_image is None:
             return
-        
+
         def convert_2d_to_3d(cX, cY, depth_image):
             depth_mm = depth_image[int(cY), int(cX)]
             distance_m = float(depth_mm) / 1000.0
@@ -275,20 +275,20 @@ class Fert_Bad_Fruit_Detector(Node):
             y_3d = distance_m * (self.sizeCamY - cY - self.centerCamY) / self.focalY
             z_3d = distance_m
             return x_3d, y_3d, z_3d
-        
+
         def lookup_transform_safe(target_frame, source_frame, entity_type, entity_id):
             try:
                 return self.tf_buffer.lookup_transform(target_frame, source_frame, rclpy.time.Time())
             except Exception as e:
                 self.get_logger().warn(f"TF lookup failed for {entity_type} {entity_id}: {e}")
                 return None
-        
+
         def publish_transform_chain(x, y, z, entity_id, entity_type, quaternion=None):
 
             # Set default quaternion for fruits
             if quaternion is None:
                 quaternion = [-0.660, 0.660, -0.253, 0.253]
-            
+
             # Determine frame names based on entity type
             if entity_type == 'marker':
                 cam_frame = f'cam_{entity_id}'
@@ -304,7 +304,7 @@ class Fert_Bad_Fruit_Detector(Node):
                 final_frame = f'{self.team_id}_bad_fruit_{entity_id}'
             else:
                 return False
-            
+
             # Publish camera_link -> cam frame
             t_cam = TransformStamped()
             t_cam.header.stamp = self.get_clock().now().to_msg()
@@ -318,12 +318,12 @@ class Fert_Bad_Fruit_Detector(Node):
             t_cam.transform.rotation.z = quaternion[2]
             t_cam.transform.rotation.w = quaternion[3]
             self.tf_broadcaster.sendTransform(t_cam)
-            
+
             # Lookup and publish base_link -> final frame
             trans = lookup_transform_safe('base_link', cam_frame, entity_type, entity_id)
             if trans is None:
                 return False
-            
+
             t_base = TransformStamped()
             t_base.header.stamp = self.get_clock().now().to_msg()
             t_base.header.frame_id = 'base_link'
@@ -331,14 +331,14 @@ class Fert_Bad_Fruit_Detector(Node):
             t_base.transform = trans.transform
             self.tf_broadcaster.sendTransform(t_base)
             return True
-        
+
         self.sizeCamX = 1280
         self.sizeCamY = 720
         self.centerCamX = 642.724365234375
         self.centerCamY = 361.9780578613281
         self.focalX = 915.3003540039062
         self.focalY = 914.0320434570312
-        
+
         bgr_image = self.cv_image.copy()
 
         # =============== ARUCO MARKER DETECTION ===============
@@ -356,9 +356,9 @@ class Fert_Bad_Fruit_Detector(Node):
                 camera_rotation = R.from_quat(camera_to_robot_quat)
                 marker_in_robot_frame = marker_orientation_quat * camera_rotation
                 final_quaternion = marker_in_robot_frame.as_quat()
-                
+
                 x, y, z = convert_2d_to_3d(cX, cY, self.depth_image)
-                
+
                 cv2.circle(bgr_image, (int(cX), int(cY)), 5, (0, 0, 255), -1)
 
                 publish_transform_chain(x, y, z, marker_id, 'marker', quaternion=final_quaternion)
@@ -369,20 +369,20 @@ class Fert_Bad_Fruit_Detector(Node):
 
         for fruit in center_fruit_list:
             cX, cY = fruit['center']
-            
+
             x_3d, y_3d, z_3d = convert_2d_to_3d(cX, cY, self.depth_image)
-            
+
             # Match with existing tracked fruit
             matched_id = None
             min_distance = float('inf')
-            
+
             for tracked_id, data in self.tracked_fruits.items():
                 tx, ty = data['pos']
                 dist = np.sqrt((cX - tx)**2 + (cY - ty)**2)
                 if dist < self.position_threshold and dist < min_distance:
                     min_distance = dist
                     matched_id = tracked_id
-            
+
             if matched_id is None:
                 # New fruit
                 matched_id = self.next_stable_id
@@ -399,13 +399,13 @@ class Fert_Bad_Fruit_Detector(Node):
                 smooth_x = self.smoothing_alpha * x_3d + (1 - self.smoothing_alpha) * old_x
                 smooth_y = self.smoothing_alpha * y_3d + (1 - self.smoothing_alpha) * old_y
                 smooth_z = self.smoothing_alpha * z_3d + (1 - self.smoothing_alpha) * old_z
-                
+
                 self.tracked_fruits[matched_id] = {
                     'pos': (cX, cY),
                     'smooth_pos': (smooth_x, smooth_y, smooth_z),
                     'frame_count': 0
                 }
-            
+
             current_frame_fruits.add(matched_id)
             fruit['stable_id'] = matched_id
 
@@ -427,20 +427,20 @@ class Fert_Bad_Fruit_Detector(Node):
         for fruit in center_fruit_list:
             cX, cY = fruit['center']
             fruit_id = fruit['stable_id']
-            
+
             # Get smoothed 3D position
             x, y, z = self.tracked_fruits[fruit_id]['smooth_pos']
 
             # Draw visualization
             w = fruit['width']
             cv2.rectangle(bgr_image, (cX - w//2, cY - w//2), (cX + w//2, cY + w//2), (0, 255, 0), 2)
-            cv2.putText(bgr_image, f"bad_fruit_{fruit_id}", (cX - w//2, cY - w//2 - 10), 
+            cv2.putText(bgr_image, f"bad_fruit_{fruit_id}", (cX - w//2, cY - w//2 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.circle(bgr_image, (cX, cY), 5, (0, 255, 0), -1)
 
             # Publish transforms
             publish_transform_chain(x, y, z, fruit_id, 'fruit')
-        
+
         # Display result
         cv2.imshow('Combined Detection', bgr_image)
         cv2.waitKey(1)

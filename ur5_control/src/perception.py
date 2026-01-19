@@ -223,7 +223,7 @@ class Fert_Bad_Fruit_Detector(Node):
             grey_percentage = (grey_pixels / ring_area) * 100
             cyan_percentage = (cyan_pixels / ring_area) * 100
 
-            print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
+            # print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
 
             if cyan_percentage > self.CYAN_THRESHOLD:
                 continue  # Good fruit, skip
@@ -250,7 +250,7 @@ class Fert_Bad_Fruit_Detector(Node):
             if distance < 1000 or distance > 2000.0:  # Skip if distance between camera and bad fruit is not between 1000mm to 2000mm
                 continue
 
-            # print(f"Detected Bad Fruit at position ({cX}, {cY}) - Distance: {distance:.3f} m, Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
+            print(f"Detected Bad Fruit at position ({cX}, {cY}) - Distance: {distance:.3f} m, Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
 
             fruit_info = {
                 'center': (cX, cY),

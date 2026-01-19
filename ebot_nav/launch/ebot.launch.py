@@ -20,9 +20,6 @@ def generate_launch_description():
         name='ebot_nav',
         output='screen',
         emulate_tty=True,
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time')
-        }]
     )
     
     # Shape detector node (Hough line detection)
@@ -32,10 +29,6 @@ def generate_launch_description():
         name='hough_line_detector',
         output='screen',
         emulate_tty=True,
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'enable_visualization': LaunchConfiguration('enable_visualization')
-        }]
     )
     
     # Log info

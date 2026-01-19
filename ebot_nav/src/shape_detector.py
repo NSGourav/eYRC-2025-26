@@ -52,7 +52,7 @@ class HoughLineDetector(Node):
     SAFETY_OFFSET_Y_TRIANGLE = 0.60                     # 25cm offset in y-direction
 
     # Dock station position and exclusion zone (to prevent false triangle detections)
-    DOCK_STATION_POSITION = np.array([2.272, -1.70])     # World coordinates of dock station
+    DOCK_STATION_POSITION = np.array([2.0, -2.3])       # World coordinates of dock station
     DOCK_EXCLUSION_RADIUS = 0.5                         # Skip triangles within 15cm of dock station
 
     def __init__(self):
@@ -151,10 +151,6 @@ class HoughLineDetector(Node):
             line_groups = self.group_by_proximity(merged_lines, 0.15)                                     # Group nearby lines
             best_group = self.find_best_group(line_groups)                                                # Select best line groups based on scoring
 
-            # if not best_group:
-            #     self.visualize(filtered_points, binary_image, merged_lines, shape_type ='No Shape', shape_position=None)
-            #     return
-
             # ========================================================================
             # SHAPE DETECTION AND LOCATION CALCULATION
             # ========================================================================
@@ -171,7 +167,6 @@ class HoughLineDetector(Node):
             if shape_type in ['Pentagon', 'Square', 'Triangle']:
                 is_new, world_pos = self.is_new_detection(shape_position, bot_position_x, bot_position_y, bot_yaw)
 
-                # Skip triangles near dock station (within 15cm) - likely false positives
                 if shape_type == 'Triangle':
                     distance_to_dock = np.linalg.norm(world_pos - self.DOCK_STATION_POSITION)
                     if distance_to_dock < self.DOCK_EXCLUSION_RADIUS:
@@ -658,13 +653,13 @@ class HoughLineDetector(Node):
                 all(g < self.CORNER_GAP_MAX for g in gaps) and
                 lines[1]['length'] < self.MAX_SQUARE_LENGTH and
                 lines[2]['length'] < self.MAX_SQUARE_LENGTH):
-                self.get_logger().info('✓ Square detected')
+                # self.get_logger().info('✓ Square detected')
                 return 'Square'
-            if (all(abs(a - 90) < 10 for a in angles) and
-                lines[1]['length'] < self.MAX_SQUARE_LENGTH and
-                lines[2]['length'] < self.MAX_SQUARE_LENGTH):
-                self.get_logger().info(f'✓ Square detected but not published: corner_gap={gaps}')
-                return None
+            # if (all(abs(a - 90) < 10 for a in angles) and
+            #     lines[1]['length'] < self.MAX_SQUARE_LENGTH and
+            #     lines[2]['length'] < self.MAX_SQUARE_LENGTH):
+            #     self.get_logger().info(f'✓ Square detected but not published: corner_gap={gaps}')
+            #     return None
 
         # Triangle: Check consecutive line pairs
         if len(lines) == 2:
@@ -684,10 +679,10 @@ class HoughLineDetector(Node):
                 gap_ok = corner_gap < self.CORNER_GAP_MAX
 
                 if angle_ok and length_ok and gap_ok:
-                    self.get_logger().info(f'✓ Triangle detected: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
+                    # self.get_logger().info(f'✓ Triangle detected: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
                     return 'Triangle'
-                elif angle_inv >= 120 and angle_inv <= 150:
-                    self.get_logger().info(f'✓ Not Triangle: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
+                # elif angle_inv >= 120 and angle_inv <= 150:
+                #     self.get_logger().info(f'✓ Not Triangle: angle={angle_inv:.1f}°, L1={L1:.3f}m, L2={L2:.3f}m, corner_gap={corner_gap}')
         return None
 
     def calculate_shape_position(self, lines: List[Dict], shape_type: str) -> np.ndarray:
@@ -711,11 +706,9 @@ class HoughLineDetector(Node):
             return corner
 
         if shape_type == 'Triangle':
-            if len(lines) == 2:
                 return compute_corner(lines[0], lines[1])
-            elif len(lines) == 3:
-                return compute_corner(lines[1], lines[2])
-        elif shape_type == 'Square' and len(lines) >= 3:
+
+        elif shape_type == 'Square':
             corner_01 = compute_corner(lines[0], lines[1])
             corner_12 = compute_corner(lines[1], lines[2])
             if abs(corner_01[1]) < abs(corner_12[1]):
@@ -729,14 +722,14 @@ class HoughLineDetector(Node):
 
     def assign_plant_id(self, actual_pos):
         plant_location = {
-            1: np.array([-0.52, -4.10]),
-            2: np.array([-0.52, -2.75]),
-            3: np.array([-0.52, -1.40]),
-            4: np.array([-0.52, -0.05]),
-            5: np.array([-2.40, -4.10]),
-            6: np.array([-2.40, -2.75]),
-            7: np.array([-2.40, -1.40]),
-            8: np.array([-2.40, -0.05])
+            1: np.array([+1.35, -0.80]),
+            2: np.array([+2.25, -0.80]),
+            3: np.array([+3.15, -0.80]),
+            4: np.array([+4.05, -0.80]),
+            5: np.array([+1.35, +0.80]),
+            6: np.array([+2.25, +0.80]),
+            7: np.array([+3.15, +0.80]),
+            8: np.array([+4.05, +0.80]),
         }
 
         min_dist = float('inf')

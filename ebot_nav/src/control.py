@@ -29,16 +29,16 @@ class EbotNav(Node):
         self.system = "HW"
 
         self.waypoints = [
-            (0.0, 0.0, -1.57),
-            (0.7, -1.857, 0.0),             # 1st lane start
+            (0.0, 0.0, -1.57),          # Home position
+            (0.7, -1.8, 0.0),           # 1st lane start
             (2.4, -1.6, 0.0),           # Dock station
             (4.5, -1.6, 0.0),           # 1st lane end
             (4.5, 0.1, 3.14),           # 2nd lane start
-            (1.0, 0.072, 3.14),           # 2nd lane end
-            (1.1, 1.656, 0.0),            # 3rd lane start
-            (4.5, 1.955, 0.0),              # 3rd lane end
-            (1.1, 1.656, 0.0),            # 3rd lane start
-            (0.0, 0.0, 3.14)                # Home
+            (1.0, 0.1, 3.14),           # 2nd lane end
+            (1.0, 1.6, 0.0),            # 3rd lane start
+            (4.5, 1.8, 0.0),            # 3rd lane end
+            (1.0, 1.6, 3.14),           # 3rd lane start
+            (0.0, 0.0, 3.14)            # Home
         ]
 
         self.waypoint_counter = 0
@@ -52,7 +52,7 @@ class EbotNav(Node):
         self.is_moving = False
         self.current_goal_x = None
         self.current_goal_y = None
-        self.goal_queue = []  # Queue to store pending goals: [('waypoint', index) or ('priority', shape_type, x, y, yaw, plant_id)]
+        self.goal_queue = []                    # Queue to store pending goals: [('waypoint', index) or ('priority', shape_type, x, y, yaw, plant_id)]
 
         # Create timer for control loop
         self.control_timer = self.create_timer(0.1, self.control)
@@ -67,7 +67,19 @@ class EbotNav(Node):
         orientation_quat = msg.pose.pose.orientation
         siny_cosp = 2 * (orientation_quat.w * orientation_quat.z + orientation_quat.x * orientation_quat.y)
         cosy_cosp = 1 - 2 * (orientation_quat.y * orientation_quat.y + orientation_quat.z * orientation_quat.z)
-        self.current_yaw = math.atan2(siny_cosp, cosy_cosp)
+        current_yaw = math.atan2(siny_cosp, cosy_cosp)
+
+        self.current_normalized_yaw = current_yaw
+        if  self.current_normalized_yaw > math.pi:
+            self.current_normalized_yaw -= 2 * math.pi
+        if self.current_normalized_yaw < -math.pi:
+            self.current_normalized_yaw += 2 * math.pi
+
+    def goal_reached_callback(self, msg):
+        if msg.data == True:
+            self.goal_reached = True
+            self.is_moving = False
+            self.get_logger().info("Goal reached!")
 
     def call_pick_and_place_service(self, data_value: bool):
 
@@ -98,11 +110,10 @@ class EbotNav(Node):
             status_msg = String()
             status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
-            self.get_logger().info(f"<<<<Published SHAPE>>>>")
+            self.get_logger().info(f"########### Published SHAPE ###########")
             time.sleep(0.1)
 
     def publish_waypoint(self, x, y, yaw):
-
         msg = String()
         msg.data = f"{x},{y},{yaw}"
         self.pose_pub.publish(msg)
@@ -122,26 +133,15 @@ class EbotNav(Node):
             y = float(parts[2])
             plant_id = float(parts[3])
 
-            self.get_logger().info(f"{shape_type} detected at ({x:.3f}, {y:.3f})")
+            self.get_logger().info(f"{shape_type} detected")
 
             # Choose yaw (1.57 or -1.57) based on which is closer to current yaw
-            current_normalized_yaw = self.current_yaw
-            while current_normalized_yaw > math.pi:
-                current_normalized_yaw -= 2 * math.pi
-            while current_normalized_yaw < -math.pi:
-                current_normalized_yaw += 2 * math.pi
+            target_yaw = 1.57 if abs(self.current_normalized_yaw - 1.57) < abs(self.current_normalized_yaw + 1.57)  else -1.57
 
-            if self.system == "SIM":
-                target_yaw = 1.57 if abs(current_normalized_yaw - 1.57) < abs(current_normalized_yaw + 1.57)  else -1.57
-            else:
-                target_yaw = 0.0 if abs(current_normalized_yaw) < math.pi/2 else math.pi
-
-            # Create new priority goal
             new_priority_goal = ('priority', shape_type, x, y, target_yaw, plant_id)
 
             # If robot is currently moving to a goal, compare distances
             if self.is_moving and self.current_goal_x is not None and self.current_x is not None:
-                # Calculate distances
                 dist_to_current_goal = math.sqrt((self.current_goal_x - self.current_x)**2 + (self.current_goal_y - self.current_y)**2)
                 dist_to_new_priority = math.sqrt((x - self.current_x)**2 + (y - self.current_y)**2)
 
@@ -151,29 +151,21 @@ class EbotNav(Node):
                 # If new priority is closer, swap them
                 if dist_to_new_priority < dist_to_current_goal:
                     self.get_logger().info("New priority is closer! Swapping goals.")
-                    # Add current goal to queue
                     if self.priority_goal is not None:
-                        # Current goal is a priority goal
                         self.goal_queue.append(self.priority_goal)
                     else:
-                        # Current goal is a waypoint
                         self.goal_queue.append(('waypoint', self.interrupted_waypoint_index if self.interrupted_waypoint_index is not None else self.waypoint_counter))
 
-                    # Make new priority the current goal
                     self.priority_goal = new_priority_goal
                     if self.interrupted_waypoint_index is None:
                         self.interrupted_waypoint_index = self.waypoint_counter
-                    # Reset goal reached to trigger new navigation
-                    self.goal_reached = True
+                    self.goal_reached = True                                    # Reset goal reached to trigger new navigation
                 else:
                     self.get_logger().info("Current goal is closer. Adding new priority to queue.")
-                    # Add new priority to queue
                     self.goal_queue.append(new_priority_goal)
             else:
-                # Not moving or can't calculate distance, set as priority goal
                 if self.priority_goal is not None:
-                    # Already have a priority goal, add to queue
-                    self.goal_queue.append(new_priority_goal)
+                    self.goal_queue.append(new_priority_goal)                    # Already have a priority goal, add to queue
                 else:
                     self.priority_goal = new_priority_goal
                     if self.interrupted_waypoint_index is None:
@@ -182,32 +174,21 @@ class EbotNav(Node):
         except Exception as e:
             self.get_logger().error(f"Error in shape_pose_recieved_callback: {str(e)}")
 
-    def goal_reached_callback(self, msg):
-        if msg.data == True:
-            self.goal_reached = True
-            self.is_moving = False
-            self.get_logger().info("Goal reached!")
-
     def control(self):
-        # Check if we're waiting for pick and place service
+
         if self.waiting_for_pick_place:
             return
 
-        # Check if we've completed all waypoints and no pending goals
         if self.waypoint_counter >= len(self.waypoints) and len(self.goal_queue) == 0 and self.priority_goal is None:
             self.get_logger().info("All waypoints completed!")
             return
 
-        # If currently moving and goal not reached, just spin to process callbacks
         if self.is_moving and not self.goal_reached:
             rclpy.spin_once(self, timeout_sec=0.01)
             return
 
-        # Goal was reached or we're ready for a new goal
-        if self.goal_reached or not self.is_moving:
-
-            # Check if we have a priority goal to handle
-            if self.priority_goal is not None:
+        if self.goal_reached or not self.is_moving:                              # Goal was reached or we're ready for a new goal
+            if self.priority_goal is not None:                                   # Check if we have a priority goal to handle
                 shape_type, x, y, yaw, plant_id = self.priority_goal[1], self.priority_goal[2], self.priority_goal[3], self.priority_goal[4], self.priority_goal[5]
 
                 # If we just reached the priority goal, handle it
@@ -254,7 +235,6 @@ class EbotNav(Node):
                             self.priority_goal = next_goal
                             self.get_logger().info(f"Queue has priority goal. Processing it next.")
                         elif next_goal[0] == 'waypoint':
-                            # It's a waypoint - continue to that waypoint
                             self.waypoint_counter = next_goal[1]
                             self.get_logger().info(f"Queue has waypoint {self.waypoint_counter}. Continuing to it.")
 

@@ -31,7 +31,7 @@ class ArmController(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher: publish end-effector velocity commands
-        self.cmd_pub = self.create_publisher(Twist, "/delta_twist_cmds", 10)
+        self.cmd_pub = self.create_publisher(TwistStamped, "/delta_twist_cmds", 10)
         self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()

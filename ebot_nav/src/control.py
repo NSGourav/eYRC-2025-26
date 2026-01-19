@@ -114,6 +114,17 @@ class EbotNav(Node):
             time.sleep(0.1)
 
     def publish_waypoint(self, x, y, yaw):
+
+        timeout = 2.0  # 2 second timeout
+        start_time = time.time()
+        
+        while self.pose_pub.get_subscription_count() == 0:
+            if time.time() - start_time > timeout:
+                self.get_logger().warn("Timeout waiting for subscribers on /set_immediate_goal")
+                break
+            self.get_logger().info("Waiting for subscribers on /set_immediate_goal...")
+            time.sleep(0.5)
+
         msg = String()
         msg.data = f"{x},{y},{yaw}"
         self.pose_pub.publish(msg)
@@ -255,7 +266,7 @@ class EbotNav(Node):
                 x, y, yaw = waypoint
 
                 # Check if this is a dock station
-                if (self.waypoint_counter == 2 or self.waypoint_counter == 10):
+                if (self.waypoint_counter == 2 or self.waypoint_counter == 15):
                     if self.goal_reached:
                         self.get_logger().info("Reached Dock Station. Publishing status.")
                         self.publish_shape_status("DOCK_STATION", 0)

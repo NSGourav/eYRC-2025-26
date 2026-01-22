@@ -8,7 +8,7 @@
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-
+  <depend>ur_simulation_gz</depend>
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>tf_transformations</depend>

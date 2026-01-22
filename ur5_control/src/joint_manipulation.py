@@ -22,6 +22,16 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 from std_srvs.srv import SetBool
 from std_msgs.msg import Float32
+import PyKDL
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+from ament_index_python.packages import get_package_share_directory
+import os
+from urdf_parser_py.urdf import URDF
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kdl_parser_py import treeFromUrdfModel
 
 class ArmController(Node):
     def __init__(self):
@@ -31,22 +41,32 @@ class ArmController(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher: publish end-effector velocity commands
-        self.cmd_pub = self.create_publisher(TwistStamped, "/delta_twist_cmds", 10)
+        self.cmd_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
+        self.joint_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
         self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
 
         self.pose_sub = self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
-        self.rate = self.create_rate(2.0, self.get_clock())
+        self.rate = self.create_rate(200.0, self.get_clock())
 
         self.flag_force = False
 
+        self.joint_positions = None
         self.current_position = None
         self.current_orientation = None
         self.current_rotation_matrix = None
         self.flag_fruit = 0
         self.flag_fertilizer_drop = 0
+
+        # Load URDF and create KDL chain for Jacobian computation
+        package_share_dir = get_package_share_directory('ur_simulation_gz')
+        urdf_path = os.path.join(package_share_dir, 'ur5_arm.urdf')
+        base_link = 'base_link'
+        end_link = 'tool0'
+        self.robot = URDF.from_xml_file(urdf_path)
+        self.kdl_chain = self.load_kdl_chain(urdf_path, base_link, end_link)
 
         self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
         self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group=self.callback_group)
@@ -88,6 +108,46 @@ class ArmController(Node):
         self.current_pose=self.lookup_tf('tool0')
         self.current_position =np.array([self.current_pose[0],self.current_pose[1],self.current_pose[2]])
         self.current_orientation =np.array([self.current_pose[3],self.current_pose[4],self.current_pose[5],self.current_pose[6]])
+
+    def joint_state_callback(self, msg):
+        """Store current joint positions from /joint_states topic"""
+        self.joint_positions = list(msg.position)
+
+    def load_kdl_chain(self, urdf_path, base_link, end_link):
+        """Load KDL chain from URDF file"""
+        success, kdl_tree = treeFromUrdfModel(self.robot)
+        if not success:
+            raise RuntimeError("Failed to parse URDF into KDL tree.")
+        chain = kdl_tree.getChain(base_link, end_link)
+        return chain
+
+    def compute_jacobian(self, chain, joint_positions):
+        """Compute Jacobian matrix for current joint configuration"""
+        nj = chain.getNrOfJoints()
+        joint_array = PyKDL.JntArray(nj)
+        for i in range(nj):
+            joint_array[i] = joint_positions[i]
+        
+        jacobian = PyKDL.Jacobian(nj)
+        solver = PyKDL.ChainJntToJacSolver(chain)
+        solver.JntToJac(joint_array, jacobian)
+        return jacobian
+
+    def damped_pseudo_inverse(self, J, damping=0.01):
+        """Compute damped pseudo-inverse of Jacobian"""
+        JT = J.T
+        identity = np.eye(J.shape[0])
+        return JT @ np.linalg.inv(J @ JT + damping**2 * identity)
+
+    def compute_joint_velocities(self, jacobian, twist_cmd):
+        """Convert Cartesian twist to joint velocities using Jacobian"""
+        # Convert KDL Jacobian to numpy array
+        J = np.array([[jacobian[i, j] for j in range(jacobian.columns())] 
+                    for i in range(6)])
+        
+        # Compute pseudo-inverse and joint velocities
+        J_pinv = self.damped_pseudo_inverse(J)
+        return J_pinv @ twist_cmd
 
     def arm_vel_publish(self,twist_cmd):
 
@@ -160,6 +220,10 @@ class ArmController(Node):
         self.previous_angular_velocity = np.zeros(3)
 
         while rclpy.ok():
+            if self.joint_positions is None:
+                self.get_logger().warn('Waiting for joint states to be available...')
+                self.rate.sleep()
+                continue
             try:
                 self.current_rotation_matrix = tf_transformations.quaternion_matrix(self.current_orientation)[:3, :3]
 
@@ -202,23 +266,37 @@ class ArmController(Node):
                 self.previous_angular_velocity = omega_world
                 self.previous_orientation_error = orientation_error
 
-                twist_cmd = Twist()
+                # Build twist command as numpy array
+                twist_array = np.zeros(6)
 
                 if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
-                    twist_cmd.angular.x = omega_world[0]
-                    twist_cmd.angular.y = omega_world[1]
-                    twist_cmd.angular.z = omega_world[2]
+                    twist_array[3] = omega_world[0]  # angular x
+                    twist_array[4] = omega_world[1]  # angular y
+                    twist_array[5] = omega_world[2]  # angular z
                 elif orientation_reached == False:
                     orientation_reached = True
 
-                if position_error_norm > self.position_tolerance and position_reached == False:
-                    twist_cmd.linear.x = desired_velocity[0]
-                    twist_cmd.linear.y = desired_velocity[1]
-                    twist_cmd.linear.z = desired_velocity[2]
+                if position_error_norm > self.position_tolerance and position_reached == False: 
+                    twist_array[0] = desired_velocity[0]  # linear x
+                    twist_array[1] = desired_velocity[1]  # linear y
+                    twist_array[2] = desired_velocity[2]  # linear z
                 elif position_reached == False:
                     position_reached = True
 
-                self.arm_vel_publish(twist_cmd)
+                # Check if joint positions are available
+                if self.joint_positions is None:
+                    self.get_logger().warn('Waiting for joint states...')
+                    self.rate.sleep()
+                    continue
+
+                # Compute Jacobian and convert twist to joint velocities
+                jacobian = self.compute_jacobian(self.kdl_chain, self.joint_positions)
+                joint_velocities = self.compute_joint_velocities(jacobian, twist_array)
+
+                # Publish joint velocities
+                vel_msg = Float64MultiArray()
+                vel_msg.data = joint_velocities.tolist()
+                self.cmd_pub.publish(vel_msg)
                 self.rate.sleep()
 
                 if position_reached == True and orientation_reached == True:

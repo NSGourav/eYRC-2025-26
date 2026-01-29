@@ -12,24 +12,21 @@
 import rclpy
 import tf2_ros
 import time
+import sys
+import os
 import numpy as np
-from geometry_msgs.msg import Twist, TwistStamped
+import tf_transformations
 from std_msgs.msg import String
 from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-import tf_transformations
 from rclpy.node import Node
-from std_srvs.srv import Trigger
 from std_srvs.srv import SetBool
-from std_msgs.msg import Float32
 import PyKDL
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from ament_index_python.packages import get_package_share_directory
-import os
 from urdf_parser_py.urdf import URDF
-import sys
-import os
+from control_msgs.msg import JointJog
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kdl_parser_py import treeFromUrdfModel
 
@@ -41,14 +38,14 @@ class ArmController(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher: publish end-effector velocity commands
-        self.cmd_pub = self.create_publisher(Float64MultiArray, "/delta_joint_cmds", 10)
+        self.cmd_pub = self.create_publisher(JointJog, "/delta_joint_cmds", 10)
         self.joint_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
-        self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
+        # self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
         self.callback_group = ReentrantCallbackGroup()
         self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
 
-        self.pose_sub = self.create_timer(0.5,self.pose_callback,callback_group=self.fruit_cb_group)
+        self.pose_sub = self.create_timer(0.5, self.pose_callback, callback_group = self.fruit_cb_group)
         self.rate = self.create_rate(200.0, self.get_clock())
 
         self.flag_force = False
@@ -68,9 +65,9 @@ class ArmController(Node):
         self.robot = URDF.from_xml_file(urdf_path)
         self.kdl_chain = self.load_kdl_chain(urdf_path, base_link, end_link)
 
-        self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
-        self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group=self.callback_group)
-        self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group=self.callback_group)
+        self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group = MutuallyExclusiveCallbackGroup())
+        self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group = self.callback_group)
+        self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group = self.callback_group)
 
         self.team_id = "5076"
         self.drop_pose = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
@@ -81,11 +78,10 @@ class ArmController(Node):
         self.home_location = [0.12, -0.11, 0.445,  0.7, -0.7, 0.0, 0.0]
 
         # Error positions
-        self.position_tolerance = 0.02
-        self.orientation_tolerance = 0.01
+        self.position_tolerance = 0.05
+        self.orientation_tolerance = 0.1
         self.max_angular_velocity = 1.0
-        self.max_linear_velocity = 0.1
-        self.min_linear_velocity = 0.0
+        self.max_linear_velocity = 0.2
         self.flag_max_linear_velocity = 0
 
         # Control loop parameters
@@ -104,10 +100,14 @@ class ArmController(Node):
         self.velocity_smoothing_factor = 0.3  # 0 = no smoothing, 1 = full smoothing
         self.dt = 0.5
 
+        self.max_joint_velocity = 1.0  # rad/s - adjust as needed
+        self.previous_joint_velocities = np.zeros(6)
+        self.joint_velocity_smoothing_factor = 0.3
+
     def pose_callback(self):
-        self.current_pose=self.lookup_tf('tool0')
-        self.current_position =np.array([self.current_pose[0],self.current_pose[1],self.current_pose[2]])
-        self.current_orientation =np.array([self.current_pose[3],self.current_pose[4],self.current_pose[5],self.current_pose[6]])
+        self.current_pose = self.lookup_tf('tool0')
+        self.current_position = np.array([self.current_pose[0],self.current_pose[1],self.current_pose[2]])
+        self.current_orientation = np.array([self.current_pose[3],self.current_pose[4],self.current_pose[5],self.current_pose[6]])
 
     def joint_state_callback(self, msg):
         """Store current joint positions from /joint_states topic"""
@@ -149,22 +149,22 @@ class ArmController(Node):
         J_pinv = self.damped_pseudo_inverse(J)
         return J_pinv @ twist_cmd
 
-    def arm_vel_publish(self,twist_cmd):
+    # def arm_vel_publish(self,twist_cmd):
 
-        twist_msg = TwistStamped()
-        twist_msg.header.stamp = self.get_clock().now().to_msg()
-        twist_msg.twist.linear.x =  twist_cmd.linear.x
-        twist_msg.twist.linear.y = twist_cmd.linear.y
-        twist_msg.twist.linear.z = twist_cmd.linear.z
-        twist_msg.twist.angular.x = twist_cmd.angular.x
-        twist_msg.twist.angular.y = twist_cmd.angular.y
-        twist_msg.twist.angular.z = twist_cmd.angular.z
-        self.cmd_pub.publish(twist_msg)
+    #     twist_msg = TwistStamped()
+    #     twist_msg.header.stamp = self.get_clock().now().to_msg()
+    #     twist_msg.twist.linear.x =  twist_cmd.linear.x
+    #     twist_msg.twist.linear.y = twist_cmd.linear.y
+    #     twist_msg.twist.linear.z = twist_cmd.linear.z
+    #     twist_msg.twist.angular.x = twist_cmd.angular.x
+    #     twist_msg.twist.angular.y = twist_cmd.angular.y
+    #     twist_msg.twist.angular.z = twist_cmd.angular.z
+    #     self.cmd_pub.publish(twist_msg)
 
-    def force_callback(self, msg):
-        if self.flag_force:
-            force_z = msg.data
-            self.get_logger().info(f'Force in Z: {force_z}')
+    # def force_callback(self, msg):
+    #     if self.flag_force:
+    #         force_z = msg.data
+    #         self.get_logger().info(f'Force in Z: {force_z}')
 
     def control_magnet(self, state):
         while not self.magnet_client.wait_for_service(timeout_sec=1.0):
@@ -238,15 +238,9 @@ class ArmController(Node):
 
                 desired_velocity = self.kp_position * position_error + self.kd_position * position_derivative
                 desired_velocity = np.clip(desired_velocity, -self.max_linear_velocity, self.max_linear_velocity)
-                desired_velocity = np.where(
-                    np.abs(desired_velocity) < self.min_linear_velocity,
-                    self.min_linear_velocity * np.sign(desired_velocity),
-                    desired_velocity
-                )
 
                 # Smooth linear velocity
-                desired_velocity = (1 - self.velocity_smoothing_factor) * desired_velocity + \
-                                   self.velocity_smoothing_factor * self.previous_linear_velocity
+                desired_velocity = (1 - self.velocity_smoothing_factor) * desired_velocity + self.velocity_smoothing_factor * self.previous_linear_velocity
                 self.previous_linear_velocity = desired_velocity
                 self.previous_position_error = position_error
 
@@ -261,20 +255,12 @@ class ArmController(Node):
                 omega_world = np.clip(omega_world, -self.max_angular_velocity, self.max_angular_velocity)
 
                 # Smooth angular velocity
-                omega_world = (1 - self.velocity_smoothing_factor) * omega_world + \
-                              self.velocity_smoothing_factor * self.previous_angular_velocity
+                omega_world = (1 - self.velocity_smoothing_factor) * omega_world + self.velocity_smoothing_factor * self.previous_angular_velocity
                 self.previous_angular_velocity = omega_world
                 self.previous_orientation_error = orientation_error
 
                 # Build twist command as numpy array
                 twist_array = np.zeros(6)
-
-                if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
-                    twist_array[3] = omega_world[0]  # angular x
-                    twist_array[4] = omega_world[1]  # angular y
-                    twist_array[5] = omega_world[2]  # angular z
-                elif orientation_reached == False:
-                    orientation_reached = True
 
                 if position_error_norm > self.position_tolerance and position_reached == False: 
                     twist_array[0] = desired_velocity[0]  # linear x
@@ -283,18 +269,26 @@ class ArmController(Node):
                 elif position_reached == False:
                     position_reached = True
 
-                # Check if joint positions are available
-                if self.joint_positions is None:
-                    self.get_logger().warn('Waiting for joint states...')
-                    self.rate.sleep()
-                    continue
+                if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
+                    twist_array[3] = omega_world[0]     # angular x
+                    twist_array[4] = omega_world[1]     # angular y
+                    twist_array[5] = omega_world[2]     # angular z
+                elif orientation_reached == False:
+                    orientation_reached = True
 
                 # Compute Jacobian and convert twist to joint velocities
                 jacobian = self.compute_jacobian(self.kdl_chain, self.joint_positions)
                 joint_velocities = self.compute_joint_velocities(jacobian, twist_array)
 
+                # Clip joint velocities
+                joint_velocities = np.clip(joint_velocities, -self.max_joint_velocity, self.max_joint_velocity)
+
+                # Smooth joint velocities
+                joint_velocities = (1 - self.joint_velocity_smoothing_factor) * joint_velocities + self.joint_velocity_smoothing_factor * self.previous_joint_velocities
+                self.previous_joint_velocities = joint_velocities
+                
                 # Publish joint velocities
-                vel_msg = Float64MultiArray()
+                vel_msg = JointJog()
                 vel_msg.data = joint_velocities.tolist()
                 self.cmd_pub.publish(vel_msg)
                 self.rate.sleep()

@@ -24,6 +24,8 @@ endif()
 install(PROGRAMS
     src/perception.py
     src/manipulation.py
+    src/joint_manipulation.py
+    src/kdl_parser_py.py
     DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY

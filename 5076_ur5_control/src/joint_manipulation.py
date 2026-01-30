@@ -6,14 +6,15 @@
 # Functions:
 #			        []
 # Nodes:		    Add your publishing and subscribing node
-#			        Publishing Topics  - [ /delta_twist_cmds ]
-#                   Subscribing Topics - [ /tcp_pose_raw]
+#			        Publishing Topics  - [ /delta_joint_cmds ]
+#                   Subscribing Topics - [ /tcp_pose_raw, /net_wrench]
 
 import rclpy
 import tf2_ros
 import time
 import sys
 import os
+import PyKDL
 import numpy as np
 import tf_transformations
 from std_msgs.msg import String
@@ -21,12 +22,12 @@ from rclpy.callback_groups import ReentrantCallbackGroup,MutuallyExclusiveCallba
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_srvs.srv import SetBool
-import PyKDL
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from ament_index_python.packages import get_package_share_directory
 from urdf_parser_py.urdf import URDF
 from control_msgs.msg import JointJog
+from std_msgs.msg import Float32
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kdl_parser_py import treeFromUrdfModel
 
@@ -36,26 +37,34 @@ class ArmController(Node):
 
         self.tf_buffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
-        # Publisher: publish end-effector velocity commands
-        self.joint_publisher = self.create_publisher(JointJog, "/delta_joint_cmds", 10)
-        self.joint_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
-        # self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
-        self.magnet_client = self.create_client(SetBool, '/magnet')
-        self.callback_group = ReentrantCallbackGroup()
-        self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
-
-        self.pose_sub = self.create_timer(0.5, self.pose_callback, callback_group = self.fruit_cb_group)
         self.rate = self.create_rate(200.0, self.get_clock())
 
-        self.flag_force = False
+        # Flags:
+        self.service_flag = 0
+        self.flag_force   = 0
+        self.flag_fruit   = 0
+        self.flag_fertilizer_drop     = 0
+        self.flag_max_linear_velocity = 0
 
-        self.joint_positions = None
-        self.current_position = None
-        self.current_orientation = None
-        self.current_rotation_matrix = None
-        self.flag_fruit = 0
-        self.flag_fertilizer_drop = 0
+        # Publisher: publish joint velocity commands
+        self.joint_velocity_publisher = self.create_publisher(JointJog, "/delta_joint_cmds", 10)
+
+        # Subscribers:
+        self.joint_state_subscriber = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
+        self.force_subscriber = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
+
+        # Services:
+        self.magnet_client = self.create_client(SetBool, '/magnet')
+        if self.service_flag:
+            self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback, callback_group = MutuallyExclusiveCallbackGroup())
+        else:
+            self.auto_sequence_timer = self.create_timer(2.0, self.trigger_sequence_0, callback_group = MutuallyExclusiveCallbackGroup())
+
+        self.fruit_cb_group = MutuallyExclusiveCallbackGroup()
+        self.pose_sub = self.create_timer(0.5, self.pose_callback, callback_group = self.fruit_cb_group)
+        self.callback_group = ReentrantCallbackGroup()
+        self.bad_fruit_trigger = self.create_timer(0.5, self.bad_fruit_callback,callback_group = self.callback_group)
+        self.drop_fertilizer_trigger = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group = self.callback_group)
 
         # Load URDF and create KDL chain for Jacobian computation
         package_share_dir = get_package_share_directory('ur_simulation_gz')
@@ -65,66 +74,56 @@ class ArmController(Node):
         self.robot = URDF.from_xml_file(urdf_path)
         self.kdl_chain = self.load_kdl_chain(urdf_path, base_link, end_link)
 
-        self.service = False
-        if self.service:
-            self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
-        else:
-            self.auto_sequence_timer = self.create_timer(2.0, self.trigger_sequence_0_once, callback_group=MutuallyExclusiveCallbackGroup())
-
-        self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group = self.callback_group)
-        self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group = self.callback_group)
-
-        self.team_id = "5076"
-        self.drop_pose = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
-        self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]
-
-        self.fertiliser_pose = None
+        # Initialize positions and oreintations
         self.ebot_pose = None
-        self.home_location = [0.12, -0.11, 0.445,  0.7, -0.7, 0.0, 0.0]
+        self.fertiliser_pose  = None
+        self.joint_positions  = None
+        self.current_position = None
+        self.current_orientation     = None
+        self.current_rotation_matrix = None
 
-        # Error positions
-        self.position_tolerance = 0.05
-        self.orientation_tolerance = 0.1
-        self.max_angular_velocity = 1.0
-        self.max_linear_velocity = 0.2
-        self.flag_max_linear_velocity = 0
+        # Location/Waypoints
+        self.drop_pose          = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
+        self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]
+        self.home_location      = [0.12, -0.11, 0.445,  0.7, -0.7, 0.0, 0.0]
+
+        # Error tolerances
+        self.position_tolerance     = 0.05
+        self.orientation_tolerance  = 0.1
+
+        # Velocity thresholdings
+        self.max_angular_velocity   = 1.0  # rad/s
+        self.max_linear_velocity    = 0.2  # rad/s
+        self.max_joint_velocity     = 1.0  # rad/s
 
         # Control loop parameters
         self.kp_position = 1.5
         self.kp_orientation = 3.0
-
-        # Derivative control
-        self.previous_position_error = np.zeros(3)
-        self.previous_orientation_error = np.zeros(3)
         self.kd_position = 0.3
         self.kd_orientation = 0.5
+        self.dt = 0.5
+        self.previous_position_error = np.zeros(3)
+        self.previous_orientation_error = np.zeros(3)
 
         # Velocity smoothing
-        self.previous_linear_velocity = np.zeros(3)
+        self.velocity_smoothing_factor = 0.3            # 0 = no smoothing, 1 = full smoothing
+        self.previous_linear_velocity  = np.zeros(3)
         self.previous_angular_velocity = np.zeros(3)
-        self.velocity_smoothing_factor = 0.3  # 0 = no smoothing, 1 = full smoothing
-        self.dt = 0.5
-
-        self.max_joint_velocity = 1.0  # rad/s - adjust as needed
         self.previous_joint_velocities = np.zeros(6)
-        self.joint_velocity_smoothing_factor = 0.3
 
-    def trigger_sequence_0_once(self):
+    def trigger_sequence_0(self):
         """Auto-trigger Sequence 0 by calling the callback internally"""
-        # Cancel timer after first run
+        # Cancel timer
         self.auto_sequence_timer.cancel()
-        
         self.get_logger().info('Auto-triggering Sequence 0...')
         
-        # Create a dummy request with data=False (for Sequence 0)
+        # Create a dummy request with data = False (for Sequence 0)
         request = SetBool.Request()
         request.data = False
-        
         response = SetBool.Response()
         
         # Call the pick_and_place_callback directly
         self.pick_and_place_callback(request, response)
-        
         self.get_logger().info(f'Auto-Sequence 0 result: {response.message}')
 
     def pose_callback(self):
@@ -156,26 +155,23 @@ class ArmController(Node):
         solver.JntToJac(joint_array, jacobian)
         return jacobian
 
-    def damped_pseudo_inverse(self, J, damping=0.01):
-        """Compute damped pseudo-inverse of Jacobian"""
-        JT = J.T
-        identity = np.eye(J.shape[0])
-        return JT @ np.linalg.inv(J @ JT + damping**2 * identity)
-
     def compute_joint_velocities(self, jacobian, twist_cmd):
         """Convert Cartesian twist to joint velocities using Jacobian"""
         # Convert KDL Jacobian to numpy array
         J = np.array([[jacobian[i, j] for j in range(jacobian.columns())] 
                     for i in range(6)])
+
+        # compute damped pseudo-inverse of Jacobian 
+        JT = J.T
+        identity = np.eye(J.shape[0])
+        J_pinv = JT @ np.linalg.inv(J @ JT + 0.01**2 * identity)    # Damping = 0.01
         
-        # Compute pseudo-inverse and joint velocities
-        J_pinv = self.damped_pseudo_inverse(J)
         return J_pinv @ twist_cmd
 
-    # def force_callback(self, msg):
-    #     if self.flag_force:
-    #         force_z = msg.data
-    #         self.get_logger().info(f'Force in Z: {force_z}')
+    def force_callback(self, msg):
+        if self.flag_force:
+            force_z = msg.data
+            self.get_logger().info(f'Force in Z: {force_z}')
 
     def control_magnet(self, state):
         while not self.magnet_client.wait_for_service(timeout_sec=1.0):
@@ -295,14 +291,14 @@ class ArmController(Node):
                 joint_velocities = np.clip(joint_velocities, -self.max_joint_velocity, self.max_joint_velocity)
 
                 # Smooth joint velocities
-                joint_velocities = (1 - self.joint_velocity_smoothing_factor) * joint_velocities + self.joint_velocity_smoothing_factor * self.previous_joint_velocities
+                joint_velocities = (1 - self.velocity_smoothing_factor) * joint_velocities + self.velocity_smoothing_factor * self.previous_joint_velocities
                 self.previous_joint_velocities = joint_velocities
                 
                 # Publish joint velocities
                 joint_cmd = JointJog()
                 joint_cmd.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
                 joint_cmd.velocities = joint_velocities.tolist()
-                self.joint_publisher.publish(joint_cmd)
+                self.joint_velocity_publisher.publish(joint_cmd)
                 self.rate.sleep()
 
                 if position_reached == True and orientation_reached == True:
@@ -312,53 +308,6 @@ class ArmController(Node):
             except Exception as e:
                 self.get_logger().error(f"Exception in goal_pose_nav: {e}")
                 self.rate.sleep()
-
-    def bad_fruit_callback(self):
-
-        if self.flag_fruit == 0:
-            return
-        self.bad_fruit_service.cancel()
-        self.flag_fruit_location = False
-
-        fruit_frames = ['5076_bad_fruit_1','5076_bad_fruit_2','5076_bad_fruit_3']
-        self.bad_fruits = [None] * 3
-
-        while not self.flag_fruit_location:
-            self.rate.sleep()
-            try:
-                for i in range(3):
-                    pose = self.lookup_tf(fruit_frames[i])
-                    self.bad_fruits[i] = pose
-                self.flag_fruit_location = True
-                self.get_logger().info('TF lookup successful — poses stored')
-            except tf2_ros.LookupException:
-                self.get_logger().debug('TF not available yet, retrying ...')
-            except tf2_ros.TransformException as ex:
-                self.get_logger().warn(f'TF error: {ex}')
-
-        for i in range(3):
-            fruit_pose = self.bad_fruits[i]
-
-            fruit_pose[2] += 0.1
-            self.goal_pose_nav(fruit_pose)
-            self.flag_max_linear_velocity = 1
-            fruit_pose[2] -= 0.08
-            self.goal_pose_nav(fruit_pose)
-            self.flag_max_linear_velocity = 0
-
-            self.control_magnet(True)
-            time.sleep(1.0)
-
-            fruit_pose[2] += 0.1
-            self.goal_pose_nav(fruit_pose)
-            self.goal_pose_nav(self.bad_fruit_waypoint)
-
-            self.goal_pose_nav(self.drop_pose)
-            self.control_magnet(False)
-
-            self.goal_pose_nav(self.bad_fruit_waypoint)
-
-        self.flag_fruit = 0
 
     def pick_and_place_callback(self, request, response):
 
@@ -409,7 +358,7 @@ class ArmController(Node):
 
             self.fertiliser_pose[2] += 0.1
             self.goal_pose_nav(self.fertiliser_pose)
-            self.fertiliser_pose[2] -= 0.08
+            self.fertiliser_pose[2] -= 0.1
             self.goal_pose_nav(self.fertiliser_pose)
             self.control_magnet(True)
 
@@ -420,11 +369,58 @@ class ArmController(Node):
 
         return response
 
+    def bad_fruit_callback(self):
+
+        if self.flag_fruit == 0:
+            return
+        self.bad_fruit_trigger.cancel()
+        self.flag_fruit_location = False
+
+        fruit_frames = ['5076_bad_fruit_1','5076_bad_fruit_2','5076_bad_fruit_3']
+        self.bad_fruits = [None] * 3
+
+        while not self.flag_fruit_location:
+            self.rate.sleep()
+            try:
+                for i in range(3):
+                    pose = self.lookup_tf(fruit_frames[i])
+                    self.bad_fruits[i] = pose
+                self.flag_fruit_location = True
+                self.get_logger().info('TF lookup successful — poses stored')
+            except tf2_ros.LookupException:
+                self.get_logger().debug('TF not available yet, retrying ...')
+            except tf2_ros.TransformException as ex:
+                self.get_logger().warn(f'TF error: {ex}')
+
+        for i in range(3):
+            fruit_pose = self.bad_fruits[i]
+
+            fruit_pose[2] += 0.1
+            self.goal_pose_nav(fruit_pose)
+            self.flag_max_linear_velocity = 1
+            fruit_pose[2] -= 0.08
+            self.goal_pose_nav(fruit_pose)
+            self.flag_max_linear_velocity = 0
+
+            self.control_magnet(True)
+            time.sleep(1.0)
+
+            fruit_pose[2] += 0.1
+            self.goal_pose_nav(fruit_pose)
+            self.goal_pose_nav(self.bad_fruit_waypoint)
+
+            self.goal_pose_nav(self.drop_pose)
+            self.control_magnet(False)
+
+            self.goal_pose_nav(self.bad_fruit_waypoint)
+
+        self.flag_fruit = 0
+
     def drop_fertilizer_callback(self):
 
         if self.flag_fertilizer_drop == 0:
             return
-        self.drop_fertilizer_service.cancel()
+        self.drop_fertilizer_trigger.cancel()
 
         self.goal_pose_nav([0.1, 0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
         self.goal_pose_nav(self.bad_fruit_waypoint)

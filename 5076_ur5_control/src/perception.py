@@ -25,7 +25,7 @@
 #			        [ calculate_rectangle_area, detect_aruco, depthimagecb, colorimagecb, bad_fruit_detection, process_image ]
 # Nodes:		    Add your publishing and subscribing node
 #			        Publishing Topics  - [ /tf ]
-#                   Subscribing Topics - [ /camera/image_raw, /camera/depth/image_raw ]
+#                   Subscribing Topics - [ //camera/camera/color/image_raw, /camera/camera/aligned_depth_to_color/image_raw ]
 
 import rclpy
 import sys

@@ -40,7 +40,7 @@ class ArmController(Node):
         self.rate = self.create_rate(200.0, self.get_clock())
 
         # Flags:
-        self.service_flag = 0
+        self.service_flag = 0                   #  flag for service activation
         self.flag_force   = 0
         self.flag_fruit   = 0
         self.flag_fertilizer_drop     = 0
@@ -94,7 +94,7 @@ class ArmController(Node):
         # Velocity thresholdings
         self.max_angular_velocity   = 1.0  # rad/s
         self.max_linear_velocity    = 0.2  # rad/s
-        self.max_joint_velocity     = 1.0  # rad/s
+        self.max_joint_velocity     = 0.5  # rad/s
 
         # Control loop parameters
         self.kp_position = 1.5
@@ -178,7 +178,7 @@ class ArmController(Node):
             self.get_logger().info('Magnet service not available, waiting...')
 
         request = SetBool.Request()
-        request.data = state  # True to activate, False to deactivate
+        request.data = state                                        # True to activate, False to deactivate
         future = self.magnet_client.call_async(request)
         return future
 
@@ -210,7 +210,6 @@ class ArmController(Node):
 
     def goal_pose_nav(self,target_location):
 
-        self.get_logger().info(f"Goal pose navigation to target: {target_location}")
         target_position = np.array(target_location[:3])
         target_quaternion = np.array(target_location[3:7])
         target_rotation_matrix = tf_transformations.quaternion_matrix(target_quaternion)[:3, :3]
@@ -277,9 +276,9 @@ class ArmController(Node):
                     position_reached = True
 
                 if orientation_error_norm > self.orientation_tolerance and orientation_reached == False:
-                    twist_array[3] = omega_world[0]     # angular x
-                    twist_array[4] = omega_world[1]     # angular y
-                    twist_array[5] = omega_world[2]     # angular z
+                    twist_array[3] = omega_world[0]       # angular x
+                    twist_array[4] = omega_world[1]       # angular y
+                    twist_array[5] = omega_world[2]       # angular z
                 elif orientation_reached == False:
                     orientation_reached = True
 
@@ -293,7 +292,8 @@ class ArmController(Node):
                 # Smooth joint velocities
                 joint_velocities = (1 - self.velocity_smoothing_factor) * joint_velocities + self.velocity_smoothing_factor * self.previous_joint_velocities
                 self.previous_joint_velocities = joint_velocities
-                
+                self.get_logger().info(f"Joint Velocities: {np.round(joint_velocities, 2)}")
+
                 # Publish joint velocities
                 joint_cmd = JointJog()
                 joint_cmd.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
@@ -302,7 +302,7 @@ class ArmController(Node):
                 self.rate.sleep()
 
                 if position_reached == True and orientation_reached == True:
-                    self.get_logger().info(f"Goal pose reached at target: {target_location}")
+                    # self.get_logger().info(f"Goal pose reached at target: {target_location}")
                     return True
 
             except Exception as e:
@@ -398,7 +398,7 @@ class ArmController(Node):
             fruit_pose[2] += 0.1
             self.goal_pose_nav(fruit_pose)
             self.flag_max_linear_velocity = 1
-            fruit_pose[2] -= 0.08
+            fruit_pose[2] -= 0.1
             self.goal_pose_nav(fruit_pose)
             self.flag_max_linear_velocity = 0
 

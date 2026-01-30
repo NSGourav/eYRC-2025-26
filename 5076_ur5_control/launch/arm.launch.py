@@ -14,7 +14,7 @@ def generate_launch_description():
     # Manipulation node
     manipulation_node = Node(
         package='ur5_control',
-        executable='manipulation.py',
+        executable='joint_manipulation.py',
         name='arm_controller_node',
         output='screen',
         emulate_tty=True,

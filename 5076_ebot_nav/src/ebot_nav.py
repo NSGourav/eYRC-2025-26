@@ -61,16 +61,9 @@ class ebotNav3B(Node):
         else:
             self.get_logger().info("Visualization DISABLED")
 
-
-        # Service call state management
-        self.waiting_for_service = False
-        self.service_future = None
-        self.service_start_time = None
-        self.service_timeout = 60.0  # seconds
-
         # Robot initial state
-        self.current_x = -1.5339
-        self.current_y = -6.6156
+        self.current_x   = 0.0
+        self.current_y   = 0.0
         self.current_yaw = 1.57  # Facing forwards
 
         self.waypoints = None          # dock
@@ -121,8 +114,8 @@ class ebotNav3B(Node):
             self.visualize_all_waypoints()
 
     def odom_callback(self,msg:Odometry):
-        self.current_x=msg.pose.pose.position.x
-        self.current_y=msg.pose.pose.position.y
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
         _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
         self.current_yaw = yaw
@@ -142,8 +135,8 @@ class ebotNav3B(Node):
         y = float(parts[1].strip())
         yaw = float(parts[2].strip())
         self.waypoints = [x, y, yaw]
-        self.flag_pose=False
-        self.flag_ori=False
+        self.flag_pose = False
+        self.flag_ori = False
         self.get_logger().info(f"Goal pose: ({self.waypoints[0]:.2f},{self.waypoints[1]:.2f},{self.waypoints[2]:.2f})")
         time.sleep(1)
 

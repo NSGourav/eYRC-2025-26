@@ -27,8 +27,6 @@ class EbotNav(Node):
         self.current_yaw = None
         self.current_normalized_yaw = None
 
-        self.system = "HW"
-
         self.waypoints = [
             (0.0, 0.0, -1.57),          # Home position
             (0.7, -1.8, 0.0),           # 1st lane start
@@ -49,8 +47,8 @@ class EbotNav(Node):
         self.interrupted_waypoint_index = None  # Index of waypoint we were going to
 
         # Goal management
-        self.goal_reached = False
-        self.is_moving = False
+        self.goal_reached   = False
+        self.is_moving      = False
         self.current_goal_x = None
         self.current_goal_y = None
         self.goal_queue = []                    # Queue to store pending goals: [('waypoint', index) or ('priority', shape_type, x, y, yaw, plant_id)]
@@ -111,7 +109,7 @@ class EbotNav(Node):
             status_msg = String()
             status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
-            self.get_logger().info(f"########### Published SHAPE ###########")
+            self.get_logger().info(f"######################## Published SHAPE ########################")
             time.sleep(0.1)
 
     def publish_waypoint(self, x, y, yaw):

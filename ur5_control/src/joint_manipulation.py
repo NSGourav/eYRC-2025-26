@@ -65,7 +65,12 @@ class ArmController(Node):
         self.robot = URDF.from_xml_file(urdf_path)
         self.kdl_chain = self.load_kdl_chain(urdf_path, base_link, end_link)
 
-        self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group = MutuallyExclusiveCallbackGroup())
+        self.service = False
+        if self.service:
+            self.pick_place_service = self.create_service(SetBool,'pick_and_place',self.pick_and_place_callback,callback_group=MutuallyExclusiveCallbackGroup())
+        else:
+            self.auto_sequence_timer = self.create_timer(2.0, self.trigger_sequence_0_once, callback_group=MutuallyExclusiveCallbackGroup())
+
         self.bad_fruit_service = self.create_timer(0.5, self.bad_fruit_callback,callback_group = self.callback_group)
         self.drop_fertilizer_service = self.create_timer(0.5, self.drop_fertilizer_callback,callback_group = self.callback_group)
 
@@ -103,6 +108,24 @@ class ArmController(Node):
         self.max_joint_velocity = 1.0  # rad/s - adjust as needed
         self.previous_joint_velocities = np.zeros(6)
         self.joint_velocity_smoothing_factor = 0.3
+
+    def trigger_sequence_0_once(self):
+        """Auto-trigger Sequence 0 by calling the callback internally"""
+        # Cancel timer after first run
+        self.auto_sequence_timer.cancel()
+        
+        self.get_logger().info('Auto-triggering Sequence 0...')
+        
+        # Create a dummy request with data=False (for Sequence 0)
+        request = SetBool.Request()
+        request.data = False
+        
+        response = SetBool.Response()
+        
+        # Call the pick_and_place_callback directly
+        self.pick_and_place_callback(request, response)
+        
+        self.get_logger().info(f'Auto-Sequence 0 result: {response.message}')
 
     def pose_callback(self):
         self.current_pose = self.lookup_tf('tool0')

@@ -30,7 +30,7 @@ class EbotNav(Node):
         self.waypoints = [
             (0.0, 0.0, -1.57),          # Home position
             (0.7, -1.8, 0.0),           # 1st lane start
-            (2.4, -1.6, 0.0),           # Dock station
+            (2.4, -1.7, 0.0),           # Dock station
             (4.5, -1.6, 0.0),           # 1st lane end
             (4.5, 0.1, 3.14),           # 2nd lane start
             (1.0, 0.1, 3.14),           # 2nd lane end
@@ -116,7 +116,7 @@ class EbotNav(Node):
 
         timeout = 2.0  # 2 second timeout
         start_time = time.time()
-        
+
         while self.pose_pub.get_subscription_count() == 0:
             if time.time() - start_time > timeout:
                 self.get_logger().warn("Timeout waiting for subscribers on /set_immediate_goal")

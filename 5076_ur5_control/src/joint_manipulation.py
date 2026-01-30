@@ -40,7 +40,7 @@ class ArmController(Node):
         self.rate = self.create_rate(200.0, self.get_clock())
 
         # Flags:
-        self.service_flag = 0                   #  flag for service activation
+        self.service_flag = 0                  #  flag for service activation
         self.flag_force   = 0
         self.flag_fruit   = 0
         self.flag_fertilizer_drop     = 0
@@ -116,12 +116,12 @@ class ArmController(Node):
         # Cancel timer
         self.auto_sequence_timer.cancel()
         self.get_logger().info('Auto-triggering Sequence 0...')
-        
+
         # Create a dummy request with data = False (for Sequence 0)
         request = SetBool.Request()
         request.data = False
         response = SetBool.Response()
-        
+
         # Call the pick_and_place_callback directly
         self.pick_and_place_callback(request, response)
         self.get_logger().info(f'Auto-Sequence 0 result: {response.message}')
@@ -149,7 +149,7 @@ class ArmController(Node):
         joint_array = PyKDL.JntArray(nj)
         for i in range(nj):
             joint_array[i] = joint_positions[i]
-        
+
         jacobian = PyKDL.Jacobian(nj)
         solver = PyKDL.ChainJntToJacSolver(chain)
         solver.JntToJac(joint_array, jacobian)
@@ -158,14 +158,14 @@ class ArmController(Node):
     def compute_joint_velocities(self, jacobian, twist_cmd):
         """Convert Cartesian twist to joint velocities using Jacobian"""
         # Convert KDL Jacobian to numpy array
-        J = np.array([[jacobian[i, j] for j in range(jacobian.columns())] 
+        J = np.array([[jacobian[i, j] for j in range(jacobian.columns())]
                     for i in range(6)])
 
-        # compute damped pseudo-inverse of Jacobian 
+        # compute damped pseudo-inverse of Jacobian
         JT = J.T
         identity = np.eye(J.shape[0])
         J_pinv = JT @ np.linalg.inv(J @ JT + 0.01**2 * identity)    # Damping = 0.01
-        
+
         return J_pinv @ twist_cmd
 
     def force_callback(self, msg):
@@ -210,6 +210,7 @@ class ArmController(Node):
 
     def goal_pose_nav(self,target_location):
 
+        self.get_logger().info(f"Goal pose navigation to target: {target_location}")
         target_position = np.array(target_location[:3])
         target_quaternion = np.array(target_location[3:7])
         target_rotation_matrix = tf_transformations.quaternion_matrix(target_quaternion)[:3, :3]
@@ -268,7 +269,7 @@ class ArmController(Node):
                 # Build twist command as numpy array
                 twist_array = np.zeros(6)
 
-                if position_error_norm > self.position_tolerance and position_reached == False: 
+                if position_error_norm > self.position_tolerance and position_reached == False:
                     twist_array[0] = desired_velocity[0]  # linear x
                     twist_array[1] = desired_velocity[1]  # linear y
                     twist_array[2] = desired_velocity[2]  # linear z
@@ -292,7 +293,7 @@ class ArmController(Node):
                 # Smooth joint velocities
                 joint_velocities = (1 - self.velocity_smoothing_factor) * joint_velocities + self.velocity_smoothing_factor * self.previous_joint_velocities
                 self.previous_joint_velocities = joint_velocities
-                self.get_logger().info(f"Joint Velocities: {np.round(joint_velocities, 2)}")
+                # self.get_logger().info(f"Joint Velocities: {np.round(joint_velocities, 2)}")
 
                 # Publish joint velocities
                 joint_cmd = JointJog()
@@ -302,7 +303,7 @@ class ArmController(Node):
                 self.rate.sleep()
 
                 if position_reached == True and orientation_reached == True:
-                    # self.get_logger().info(f"Goal pose reached at target: {target_location}")
+                    self.get_logger().info(f"Goal pose reached at target: {target_location}")
                     return True
 
             except Exception as e:
@@ -329,6 +330,7 @@ class ArmController(Node):
 
         if request.data == False:  # Sequence 0
 
+            self.fertiliser_pose[0] += 0.03
             self.fertiliser_pose[1] += 0.1
             self.goal_pose_nav(self.fertiliser_pose)
             self.flag_max_linear_velocity = 1
@@ -339,8 +341,16 @@ class ArmController(Node):
             self.control_magnet(True)
             time.sleep(1.0)
 
-            self.fertiliser_pose[1] += 0.2
+            self.fertiliser_pose[2] += 0.05
             self.goal_pose_nav(self.fertiliser_pose)
+
+            self.fertiliser_pose[1] += 0.12
+            self.goal_pose_nav(self.fertiliser_pose)
+
+            self.fertiliser_pose[2] -= 0.1
+            self.goal_pose_nav(self.fertiliser_pose)
+            self.get_logger().info('Pick and came back')
+            self.goal_pose_nav([0.1, -0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
 
             self.ebot_pose[2] += 0.2
             self.goal_pose_nav(self.ebot_pose)

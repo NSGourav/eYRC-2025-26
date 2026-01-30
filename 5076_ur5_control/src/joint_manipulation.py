@@ -38,7 +38,7 @@ class ArmController(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher: publish end-effector velocity commands
-        self.cmd_pub = self.create_publisher(JointJog, "/delta_joint_cmds", 10)
+        self.joint_publisher = self.create_publisher(JointJog, "/delta_joint_cmds", 10)
         self.joint_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 10)
         # self.force_sub = self.create_subscription(Float32, '/net_wrench', self.force_callback, 10)
         self.magnet_client = self.create_client(SetBool, '/magnet')
@@ -172,18 +172,6 @@ class ArmController(Node):
         J_pinv = self.damped_pseudo_inverse(J)
         return J_pinv @ twist_cmd
 
-    # def arm_vel_publish(self,twist_cmd):
-
-    #     twist_msg = TwistStamped()
-    #     twist_msg.header.stamp = self.get_clock().now().to_msg()
-    #     twist_msg.twist.linear.x =  twist_cmd.linear.x
-    #     twist_msg.twist.linear.y = twist_cmd.linear.y
-    #     twist_msg.twist.linear.z = twist_cmd.linear.z
-    #     twist_msg.twist.angular.x = twist_cmd.angular.x
-    #     twist_msg.twist.angular.y = twist_cmd.angular.y
-    #     twist_msg.twist.angular.z = twist_cmd.angular.z
-    #     self.cmd_pub.publish(twist_msg)
-
     # def force_callback(self, msg):
     #     if self.flag_force:
     #         force_z = msg.data
@@ -311,9 +299,10 @@ class ArmController(Node):
                 self.previous_joint_velocities = joint_velocities
                 
                 # Publish joint velocities
-                vel_msg = JointJog()
-                vel_msg.data = joint_velocities.tolist()
-                self.cmd_pub.publish(vel_msg)
+                joint_cmd = JointJog()
+                joint_cmd.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+                joint_cmd.velocities = joint_velocities.tolist()
+                self.joint_publisher.publish(joint_cmd)
                 self.rate.sleep()
 
                 if position_reached == True and orientation_reached == True:

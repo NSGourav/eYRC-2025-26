@@ -25,6 +25,7 @@ class EbotNav(Node):
         self.current_x = None
         self.current_y = None
         self.current_yaw = None
+        self.current_normalized_yaw = None
 
         self.system = "HW"
 

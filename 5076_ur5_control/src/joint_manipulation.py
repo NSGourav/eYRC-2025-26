@@ -85,7 +85,7 @@ class ArmController(Node):
         # Location/Waypoints
         self.drop_pose          = [-0.81, 0.1, 0.3, 0.7, -0.7, 0.0, 0.0]
         self.bad_fruit_waypoint = [-0.6, 0.15, 0.5, 0.7, -0.7, 0.0, 0.0]
-        self.home_location      = [0.12, -0.11, 0.445,  0.7, -0.7, 0.0, 0.0]
+        self.home_location      = [0.12, -0.11, 0.445,  0.5, 0.5, 0.5, 0.5]
 
         # Error tolerances
         self.position_tolerance     = 0.05
@@ -341,16 +341,17 @@ class ArmController(Node):
             self.control_magnet(True)
             time.sleep(1.0)
 
-            self.fertiliser_pose[2] += 0.05
+            self.fertiliser_pose[2] += 0.07
             self.goal_pose_nav(self.fertiliser_pose)
 
-            self.fertiliser_pose[1] += 0.12
+            self.fertiliser_pose[1] += 0.15
             self.goal_pose_nav(self.fertiliser_pose)
 
             self.fertiliser_pose[2] -= 0.1
             self.goal_pose_nav(self.fertiliser_pose)
             self.get_logger().info('Pick and came back')
-            self.goal_pose_nav([0.1, -0.2, 0.5, 0.7, -0.7, 0.0, 0.0])
+            self.goal_pose_nav(self.home_location)
+            # self.goal_pose_nav([0.2, -0.3, 0.5, 0.7, -0.7, 0.0, 0.0])
 
             self.ebot_pose[2] += 0.2
             self.goal_pose_nav(self.ebot_pose)

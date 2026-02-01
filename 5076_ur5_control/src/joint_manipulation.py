@@ -92,14 +92,14 @@ class ArmController(Node):
         self.orientation_tolerance  = 0.1
 
         # Velocity thresholdings
-        self.max_angular_velocity   = 1.0  # rad/s
-        self.max_linear_velocity    = 0.2  # rad/s
+        self.max_angular_velocity   = 0.3  # rad/s
+        self.max_linear_velocity    = 0.1
         self.max_joint_velocity     = 0.5  # rad/s
 
         # Control loop parameters
         self.kp_position = 1.5
-        self.kp_orientation = 3.0
-        self.kd_position = 0.3
+        self.kp_orientation = 1.5
+        self.kd_position = 0.5
         self.kd_orientation = 0.5
         self.dt = 0.5
         self.previous_position_error = np.zeros(3)
@@ -330,28 +330,33 @@ class ArmController(Node):
 
         if request.data == False:  # Sequence 0
 
-            self.fertiliser_pose[0] += 0.03
+            self.fertiliser_pose[0] += 0.04
             self.fertiliser_pose[1] += 0.1
+            self.fertiliser_pose[2] += 0.01
             self.goal_pose_nav(self.fertiliser_pose)
+
             self.flag_max_linear_velocity = 1
             self.fertiliser_pose[1] -= 0.1
             self.goal_pose_nav(self.fertiliser_pose)
             self.flag_max_linear_velocity = 0
 
             self.control_magnet(True)
-            time.sleep(1.0)
+            time.sleep(0.5)
 
-            self.fertiliser_pose[2] += 0.07
+            self.fertiliser_pose[2] += 0.06
             self.goal_pose_nav(self.fertiliser_pose)
 
-            self.fertiliser_pose[1] += 0.15
+            self.fertiliser_pose[1] += 0.2
             self.goal_pose_nav(self.fertiliser_pose)
 
             self.fertiliser_pose[2] -= 0.1
             self.goal_pose_nav(self.fertiliser_pose)
-            self.get_logger().info('Pick and came back')
-            self.goal_pose_nav(self.home_location)
-            # self.goal_pose_nav([0.2, -0.3, 0.5, 0.7, -0.7, 0.0, 0.0])
+
+            # self.joint_rotation()
+            self.goal_pose_nav([0.2, -0.3, 0.5, 0.5, 0.5, -0.5, 0.5])
+
+            # self.goal_pose_nav(self.home_location)
+            self.goal_pose_nav([0.2, -0.3, 0.5, 0.7, -0.7, 0.0, 0.0])
 
             self.ebot_pose[2] += 0.2
             self.goal_pose_nav(self.ebot_pose)
@@ -379,6 +384,23 @@ class ArmController(Node):
             response.message = "Sequence 1 completed successfully"
 
         return response
+    
+    def joint_rotation(self):
+        joint_cmd = JointJog()
+        joint_cmd.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+        joint_cmd.velocities = [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]  # Move elbow joint
+
+        start_angle = self.joint_positions[0]
+
+        while abs(self.joint_positions[0] - start_angle) < 1.57:
+            self.joint_velocity_publisher.publish(joint_cmd)
+            self.rate.sleep()
+
+        # Optional: send zero velocity once (recommended for safety)
+        joint_cmd.velocities = [0.0] * 6
+        self.joint_velocity_publisher.publish(joint_cmd)
+
+        return
 
     def bad_fruit_callback(self):
 
@@ -406,6 +428,8 @@ class ArmController(Node):
         for i in range(3):
             fruit_pose = self.bad_fruits[i]
 
+            fruit_pose[1] += 0.02
+
             fruit_pose[2] += 0.1
             self.goal_pose_nav(fruit_pose)
             self.flag_max_linear_velocity = 1
@@ -414,7 +438,7 @@ class ArmController(Node):
             self.flag_max_linear_velocity = 0
 
             self.control_magnet(True)
-            time.sleep(1.0)
+            time.sleep(0.5)
 
             fruit_pose[2] += 0.1
             self.goal_pose_nav(fruit_pose)

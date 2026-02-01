@@ -109,7 +109,7 @@ class EbotNav(Node):
             status_msg = String()
             status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
-            self.get_logger().info(f"######################## Published SHAPE ########################")
+            self.get_logger().info({status_msg.data})
             time.sleep(0.1)
 
     def publish_waypoint(self, x, y, yaw):

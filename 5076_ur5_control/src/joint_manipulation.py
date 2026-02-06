@@ -40,7 +40,7 @@ class ArmController(Node):
         self.rate = self.create_rate(200.0, self.get_clock())
 
         # Flags:
-        self.service_flag = 0                  #  flag for service activation
+        self.service_flag = 1                  #  flag for service activation
         self.flag_force   = 0
         self.flag_fruit   = 0
         self.flag_fertilizer_drop     = 0
@@ -343,20 +343,20 @@ class ArmController(Node):
             self.control_magnet(True)
             time.sleep(0.5)
 
-            self.fertiliser_pose[2] += 0.06
+            self.fertiliser_pose[2] += 0.05
             self.goal_pose_nav(self.fertiliser_pose)
 
-            self.fertiliser_pose[1] += 0.2
+            self.fertiliser_pose[1] += 0.3
             self.goal_pose_nav(self.fertiliser_pose)
 
             self.fertiliser_pose[2] -= 0.1
             self.goal_pose_nav(self.fertiliser_pose)
 
-            # self.joint_rotation()
-            self.goal_pose_nav([0.2, -0.3, 0.5, 0.5, 0.5, -0.5, 0.5])
+            self.joint_rotation()
+            # self.goal_pose_nav([0.2, -0.3, 0.5, 0.5, 0.5, -0.5, 0.5])
 
             # self.goal_pose_nav(self.home_location)
-            self.goal_pose_nav([0.2, -0.3, 0.5, 0.7, -0.7, 0.0, 0.0])
+            # self.goal_pose_nav([0.2, -0.3, 0.5, 0.7, -0.7, 0.0, 0.0])
 
             self.ebot_pose[2] += 0.2
             self.goal_pose_nav(self.ebot_pose)
@@ -384,7 +384,7 @@ class ArmController(Node):
             response.message = "Sequence 1 completed successfully"
 
         return response
-    
+
     def joint_rotation(self):
         joint_cmd = JointJog()
         joint_cmd.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
@@ -425,15 +425,17 @@ class ArmController(Node):
             except tf2_ros.TransformException as ex:
                 self.get_logger().warn(f'TF error: {ex}')
 
+        self.goal_pose_nav([0.2, 0.3, 0.5, 0.5, 0.5, -0.5, 0.5])
+
         for i in range(3):
             fruit_pose = self.bad_fruits[i]
 
-            fruit_pose[1] += 0.02
+            fruit_pose[1] += 0.01
 
-            fruit_pose[2] += 0.1
+            fruit_pose[2] += 0.15
             self.goal_pose_nav(fruit_pose)
             self.flag_max_linear_velocity = 1
-            fruit_pose[2] -= 0.1
+            fruit_pose[2] -= 0.13
             self.goal_pose_nav(fruit_pose)
             self.flag_max_linear_velocity = 0
 

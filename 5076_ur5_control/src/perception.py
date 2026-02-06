@@ -159,7 +159,7 @@ class Fert_Bad_Fruit_Detector(Node):
         self.upper_grey = np.array([180, 75, 160])          # HSV upper bound for grey color detection
 
         self.CYAN_THRESHOLD = 15.0                          # Amount of cyan pixels present around the fruit
-        self.GREY_THRESHOLD = 20.0                          # Amount of grey pixels present around the fruit
+        self.GREY_THRESHOLD = 25.0                          # Amount of grey pixels present around the fruit
 
         self.min_pixel_area_fruit = 200                     # Minimum pixel area of the fruit in the image
         self.max_pixel_area_fruit = 2000                    # Maximum pixel area of the fruit in the image
@@ -223,7 +223,7 @@ class Fert_Bad_Fruit_Detector(Node):
             grey_percentage = (grey_pixels / ring_area) * 100
             cyan_percentage = (cyan_pixels / ring_area) * 100
 
-            print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
+            # print(f" Fruits :- Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
 
             if cyan_percentage > self.CYAN_THRESHOLD:
                 continue  # Good fruit, skip
@@ -250,7 +250,7 @@ class Fert_Bad_Fruit_Detector(Node):
             if distance < 1000 or distance > 2000.0:  # Skip if distance between camera and bad fruit is not between 1000mm to 2000mm
                 continue
 
-            # print(f"Detected Bad Fruit at position ({cX}, {cY}) - Distance: {distance:.3f} m, Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
+            print(f"Detected Bad Fruit Grey: {grey_percentage:.1f}%, Cyan: {cyan_percentage:.1f}%")
 
             fruit_info = {
                 'center': (cX, cY),

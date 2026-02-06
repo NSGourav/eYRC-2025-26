@@ -10,7 +10,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import math
 import tf2_ros
 from tf2_ros import TransformException
@@ -102,7 +102,7 @@ class HoughLineDetector(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.declare_parameter('enable_visualization', True)
+        self.declare_parameter('enable_visualization', False)
         self.enable_visualization = self.get_parameter('enable_visualization').value
 
         # Visualization setup

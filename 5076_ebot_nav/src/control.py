@@ -109,7 +109,7 @@ class EbotNav(Node):
             status_msg = String()
             status_msg.data = f"{shape_status},{self.current_x},{self.current_y},{plant_id}"
             self.shape_pub.publish(status_msg)
-            self.get_logger().info({status_msg.data})
+            # self.get_logger().info(status_msg.data)
             time.sleep(0.1)
 
     def publish_waypoint(self, x, y, yaw):
@@ -146,7 +146,11 @@ class EbotNav(Node):
             self.get_logger().info(f"{shape_type} detected")
 
             # Choose yaw (1.57 or -1.57) based on which is closer to current yaw
-            target_yaw = 1.57 if abs(self.current_normalized_yaw - 1.57) < abs(self.current_normalized_yaw + 1.57)  else -1.57
+            diff_1_57 = abs(self._normalize_angle(self.current_yaw - 0))
+            diff_neg_1_57 = abs(self._normalize_angle(self.current_yaw - (3.14)))
+            target_yaw = 0.0 if diff_1_57 < diff_neg_1_57 else 3.14
+
+            # target_yaw = 1.57 if abs(self.current_normalized_yaw - 0.0) < abs(self.current_normalized_yaw + 1.57)  else 3.14
 
             new_priority_goal = ('priority', shape_type, x, y, target_yaw, plant_id)
 
@@ -267,7 +271,7 @@ class EbotNav(Node):
                 # Check if this is a dock station
                 if (self.waypoint_counter == 2 or self.waypoint_counter == 15):
                     if self.goal_reached:
-                        self.get_logger().info("Reached Dock Station. Publishing status.")
+                        # self.get_logger().info("Reached Dock Station. Publishing status.")
                         self.publish_shape_status("DOCK_STATION", 0)
                         time.sleep(2)
 

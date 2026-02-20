@@ -2,6 +2,14 @@
 
 This repository contains the simulation setup for the Krishi Cobot (eYantra Robotics Competition 2025-26).
 
+## Overview
+
+Krishi coBot – eYRC 2025–26 is a robotics competition focused on designing and implementing a cooperative agricultural automation system using ROS2. The theme revolves around a smart vertical farm where a mobile robot (eBot) and a UR5 robotic arm work together to manage crop monitoring, fertilizer handling, and fruit quality inspection.
+
+The objective is to build a complete autonomous workflow where the mobile robot navigates greenhouse lanes, detects plant conditions using LiDAR-based shape recognition, reports fertilizer needs or health issues, and coordinates with the UR5 arm for fertilizer exchange. Simultaneously, the UR5 performs vision-based fruit inspection, identifies defective fruits, and removes them using pick-and-place manipulation.
+
+The project integrates perception, navigation, manipulation, shape detection, and overall control logic to achieve a fully coordinated agricultural automation cycle in both simulation and real hardware environments.
+
 ## Tasks
 
 - `Task 1A` - LiDAR-Based Waypoint Navigation

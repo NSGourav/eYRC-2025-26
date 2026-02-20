@@ -5,8 +5,8 @@ This repository contains the simulation setup for the Krishi Cobot (eYantra Robo
 ## Tasks
 
 - `Task 1A/` - LiDAR-Based Waypoint Navigation
-- `Task 1B/` - Object Pose Estimation
-- `Task 1C/` - Arm Manipulation
+- `Task 1B/` - Object Pose Estimation - Aurco Marker + Bad Fruit
+- `Task 1C/` - Waypoint-Based Servo Control for Robotic Arm Manipulation
 - `Task 2A/` - Autonomous Navigation with Shape Detection
 - `Task 2B/` - Pick and Place Operations
 - `Task 3A/` - Remote Hardware Task - Object Pose Estimation

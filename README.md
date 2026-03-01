@@ -116,7 +116,7 @@ ros2 run ebot_nav main.py
 - Executed coordinated pick-and-place operations using UR5 with servo-based control
 - Validated end-to-end greenhouse workflow from navigation to manipulation
 
-### Competition Outcome: **Ranked 16th out of 400+ teams** in the e-Yantra Robotics Competition 2025–26
+**Competition Outcome: Ranked 16th out of 400+ teams** in the e-Yantra Robotics Competition 2025–26
 
 ## My Contributions
 - Implemented vision-based bad fruit detection and ArUco marker detection with depth-assisted 3D pose estimation

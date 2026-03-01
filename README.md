@@ -1,6 +1,6 @@
 # Krishi Cobot (KC) theme for eYRC 2025-26
 
-This repository contains the simulation setup for the Krishi Cobot (eYantra Robotics Competition 2025-26).
+This repository contains the simulation setup and hardware implementation codes for the Krishi Cobot (eYantra Robotics Competition 2025-26).
 
 ## Project Overview
 
@@ -23,7 +23,7 @@ The system consists of two primary robotic subsystems:
 
 ### Vision & Manipulation Subsystem (UR5)
 - ArUco marker detection using OpenCV
-- Depth-assisted 3D pose estimation of ArUco markers and detected fruits
+- Depth-assisted 3D pose estimation for detected objects
 - TF2-based frame transformations (camera → base → world)
 - Servo-based end-effector control
 - Pick-and-place execution for defective fruit removal
@@ -76,19 +76,18 @@ The architecture enables an end-to-end autonomous workflow where the mobile robo
 - ROS 2 Humble
 - Gazebo Fortress 
 
-### Clone and Build
+### Clone Repository
 ```bash
 cd ~/eyrc/src
 git clone https://github.com/NSGourav/eYRC-2025-26-krishi-cobot.git
-mv eYRC-2025-26-krishi-cobot/* .
-rm -rf eYRC-2025-26-krishi-cobot
 ```
+### Build Repository
 ```bash
 cd ~/eyrc
 colcon build
 source install/setup.bash
 ```
-
+- ROS Bag for Testing Hardware: [Download ROS Bag](https://drive.google.com/drive/folders/1HXDsmIbGBEiUMtXQmhGnGeMhSDm0VA2i?usp=sharing)
 
 ## Launch Commands
 
@@ -109,6 +108,19 @@ Run Control file
 ros2 run ebot_nav main.py
 ```
 
-## ROS Bag for Testing
+## Results & Performance
 
-[Download ROS Bag](https://drive.google.com/drive/folders/1HXDsmIbGBEiUMtXQmhGnGeMhSDm0VA2i?usp=sharing)
+- Successfully implemented a complete autonomous mobile–manipulator pipeline in simulation and hardware environments
+- Achieved stable LiDAR-based navigation with real-time shape detection
+- Implemented reliable ArUco-based 3D pose estimation with TF frame transformations
+- Executed coordinated pick-and-place operations using UR5 with servo-based control
+- Validated end-to-end greenhouse workflow from navigation to manipulation
+
+### Competition Outcome: **Ranked 16th out of 400+ teams** in the e-Yantra Robotics Competition 2025–26
+
+## My Contributions
+- Implemented vision-based bad fruit detection and ArUco marker detection with depth-assisted 3D pose estimation
+- Built TF2 frame transformation pipeline for accurate coordinate mapping
+- Implemented servo-based manipulation logic for UR5 pick-and-place
+- Integrated ROS2 topic-based communication between navigation and manipulation modules
+- Executed simulation-to-hardware transition and system validation
